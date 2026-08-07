@@ -382,3 +382,78 @@ chemistry tutor that.
 
 `ablation/test_planted.py` now carries an anti-circularity assertion, because this class of bug
 does not show up in the output — only in the method.
+
+### D22. The eviction rate was a *probe* problem, not a threshold problem
+
+Chasing the eviction rate produced a measurement that looked like a dead end, and then a fix that
+came from somewhere else entirely. Both halves are worth recording, because the first half is what
+made us look in the right place.
+
+**The measurement.** `INFLUENCE_THRESHOLD` appeared to have to satisfy two incompatible demands.
+Across the 21 seeded conversation turns, against ~100 retrieved memories:
+
+| threshold | median memories influencing an answer | turns where nothing influences | junk memory influential? |
+|---|---|---|---|
+| 0.06 | 16 | 0 / 21 | **yes** ← wrongly `keep` |
+| 0.10 | 10 | 1 / 21 | **yes** ← wrongly `keep` |
+| 0.13 | 2 | 2 / 21 | no |
+| 0.20 | **1** | **5 / 21** | no |
+
+The junk memory peaks at **0.125** against real turns and the critical memory at **0.429**. Below
+~0.13 the composer draws on a realistic number of memories but returns the wrong verdict on the one
+memory we can actually check; above ~0.13 the verdicts are right but the composer consults a median
+of **one memory out of a hundred**, so 99 of them change nothing and ~70% of memories look
+evictable by construction.
+
+I concluded from this that no single lexical score could model relevance well enough, and that we
+should stop making an aggregate claim. **That conclusion was wrong**, and it is left here in
+outline because the reasoning error is instructive: I was varying the one parameter I happened to be
+looking at.
+
+**The actual cause was coverage.** With probes drawn only from 21 conversation turns, a memory
+about Lewis structures is never touched by three conversations on stoichiometry. It was not that
+those memories failed to influence answers — it was that no probe ever put them in a position to.
+The threshold looked responsible because both symptoms move together.
+
+**The fix (D23) is leave-one-out probing**, and it resolves the table above without touching the
+threshold, which stays at **0.20**. Probing each memory with questions derived from its topical
+neighbours means every memory is exercised by a question it could plausibly bear on: median **25**
+probes per memory, against 21 before, and every one of them actually retrieving the memory under
+test.
+
+Result: **6 `evict` / 19 `keep` / 0 inconclusive — 24%** — with similarity spread across 0.44–1.00
+rather than piled at 1.0000, and both planted controls correct. That is a credible rate, and the
+aggregate figure on the dashboard is defensible with its existing provenance label.
+
+*What the near-miss cost, and what it bought:* an hour spent tuning a constant that was never the
+problem. What made it recoverable was measuring the thing itself — median influential memories per
+turn — instead of continuing to stare at the verdict counts. If a parameter sweep has no good
+setting, the parameter is usually not the variable.
+
+### D23. Ablation probes come from a memory's neighbours, never from itself
+
+Three probe strategies were tried. Only the third is sound.
+
+| probe source | failure | symptom |
+|---|---|---|
+| the memory's own distinctive words | **circular** — a memory is always relevant to itself | everything `keep`; junk memory survives |
+| conversation turns only | **too narrow** — 21 turns cannot exercise 156 memories | everything `evict`; scores pile at 1.0000 |
+| **conversation turns + neighbour-derived, excluding self** | — | 24% evict, spread 0.44–1.00, controls correct |
+
+The question ablation actually asks is not *"does anything reference this memory?"* but:
+
+> **Given everything else this agent knows, does this memory still change the answer?**
+
+So each memory is probed with questions formed from its most similar *other* memories. Non-circular
+by construction, and it tests exactly the right property:
+
+* the memory is the **sole source** of something → the answer changes → `keep`
+* its content is **covered by its neighbours** → the answer does not change → `evict`
+
+The second is a genuine finding rather than a failure. A redundant memory really is evictable, and
+this demonstrates it instead of asserting it.
+
+Two regression tests guard the method rather than the output, because both earlier bugs were
+invisible in the results table and visible only in how it was produced: one asserts a memory is
+never used to build its own probes, the other that neighbour selection excludes the memory under
+test.

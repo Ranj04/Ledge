@@ -8,7 +8,7 @@ import pytest
 from app.config import make_cortex_client, make_everos_client
 from app.contracts import Memory
 
-from ablation.harness import build_probes, evaluate_memory
+from ablation.harness import build_probes, evaluate_memory, neighbour_probes
 
 
 @pytest.mark.asyncio
@@ -51,11 +51,11 @@ async def test_never_retrieved_is_inconclusive() -> None:
 
     assert result.verdict == "inconclusive"
     assert result.similarity is None
-    assert "Conditionally retrieved" in result.note
+    assert "untested, not disposable" in result.note
 
 
 @pytest.mark.asyncio
-async def test_never_retrieved_always_injected_is_evict() -> None:
+async def test_never_retrieved_always_injected_is_inconclusive() -> None:
     absent = Memory(
         memory_id="mem_profile_not_in_store",
         memory_type="profile",
@@ -70,9 +70,9 @@ async def test_never_retrieved_always_injected_is_evict() -> None:
         probes=["Will this probe retrieve a missing memory?"],
     )
 
-    assert result.verdict == "evict"
+    assert result.verdict == "inconclusive"
     assert result.similarity is None
-    assert "Always-injected" in result.note
+    assert "untested, not disposable" in result.note
 
 
 def test_probes_do_not_use_memory_under_test(tmp_path: Path) -> None:
@@ -97,3 +97,27 @@ def test_probes_do_not_use_memory_under_test(tmp_path: Path) -> None:
 
     assert first == questions
     assert second == questions
+
+
+def test_neighbour_probes_exclude_memory_under_test() -> None:
+    target = Memory(
+        memory_id="mem_target",
+        memory_type="semantic",
+        content="targetonly circularword",
+        user_id="student",
+    )
+    neighbours = [
+        Memory(
+            memory_id=f"mem_neighbour_{index}",
+            memory_type="semantic",
+            content=f"shared topic neighbourword{index}",
+            user_id="student",
+        )
+        for index in range(5)
+    ]
+
+    probes = neighbour_probes(target, [target, *neighbours])
+
+    assert len(probes) == 4
+    assert all("targetonly" not in probe and "circularword" not in probe for probe in probes)
+    assert all("neighbourword" in probe for probe in probes)

@@ -112,11 +112,20 @@ async def main() -> None:
                 store=store,
                 monthly_cost_usd=float(cost.get("monthly_cost_usd") or 0.0),
                 tier=int(cost.get("tier", 0)) if cost else None,
+                memory_pool=memories,
             )
         )
 
     print()
     _print_table(results)
+    print("\nProbe count per memory (probes that retrieved the memory):")
+    for result in results:
+        print(f"  {result.memory_id}: {result.probes_tested}")
+    print(
+        "`evict` = the answer did not change across N probes, where N is the probe count "
+        "above. That is evidence, not proof — a memory no probe exercises is untested, "
+        "not disposable."
+    )
     evict_total = sum(result.monthly_cost_usd for result in results if result.verdict == "evict")
     print(f"\nEviction candidates in tested set: ${evict_total:.2f}/month projected.")
     print(f"Coverage: tested {len(selected)} of {len(memories)} memories; {scope} run.")

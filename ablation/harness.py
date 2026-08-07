@@ -1,19 +1,16 @@
-"""Replay realistic user questions with one memory removed.
+"""Replay realistic and leave-one-out questions with one memory removed.
 
-A memory earns its cost by changing the answer to a question the user actually
-asks. The settings-panel log is genuinely relevant to a question *about the
-settings panel* -- and nobody asks the tutor that. Probing with realistic
-questions is what makes ``evict`` mean something.
-
-Probe questions therefore come only from seeded conversation turns. They are
-never synthesized from the memory under test, which would make the test
-circular by manufacturing a question that is guaranteed to concern the item.
+Seeded conversation turns remain the strongest probes. Topical neighbours add
+coverage for memories that those few conversations never exercise. A neighbour
+probe is made only from a *different* memory, so the memory under test cannot
+manufacture a question guaranteed to concern itself.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +21,7 @@ from app.assembler.tiering import NATURAL_TIER, TierRegistry
 from app.config import make_cortex_client, make_everos_client, make_ledger_store
 from app.contracts import Memory
 from app.cortex.tokens import count_tokens
+from app.everos.mock_client import lexical_score, tokenize
 
 from ablation.similarity import SimilarityScorer, scorer_from_env
 
@@ -34,7 +32,8 @@ EVICT_MIN_SIMILARITY = 0.98
 KEEP_MAX_SIMILARITY = 0.90
 
 CONVERSATIONS_PATH = Path("data/seed/conversations.json")
-ALWAYS_INJECTED_TYPES = frozenset({"profile", "procedural"})
+NEIGHBOUR_PROBE_COUNT = 4
+PROBE_CONTENT_WORDS = 6
 
 
 @dataclass
@@ -82,9 +81,79 @@ def conversation_probes(user_id: str, path: Path = CONVERSATIONS_PATH) -> list[s
     ]
 
 
-def build_probes(memory: Memory, path: Path = CONVERSATIONS_PATH) -> list[str]:
-    """Return real questions for this user without consulting memory content."""
-    return list(dict.fromkeys(conversation_probes(memory.user_id, path)))
+def nearest_neighbours(
+    memory: Memory,
+    memory_pool: Iterable[Memory],
+    *,
+    count: int = NEIGHBOUR_PROBE_COUNT,
+) -> list[Memory]:
+    """Return the most lexically similar memories in deterministic order."""
+    candidates = [
+        candidate
+        for candidate in memory_pool
+        if candidate.user_id == memory.user_id and candidate.memory_id != memory.memory_id
+    ]
+    # This exclusion is the leave-one-out guarantee. Removing it silently
+    # recreates the circular phase-7 bug by letting M manufacture its own probe.
+    assert all(candidate.memory_id != memory.memory_id for candidate in candidates)
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            -lexical_score(memory.content, candidate.content),
+            candidate.memory_id,
+        ),
+    )[:count]
+
+
+def _distinctive_words(
+    content: str,
+    memory_pool: Iterable[Memory],
+    *,
+    limit: int = PROBE_CONTENT_WORDS,
+) -> list[str]:
+    """Prefer content words that occur in the fewest neighbouring memories."""
+    document_frequency = Counter(
+        word for candidate in memory_pool for word in tokenize(candidate.content)
+    )
+    return sorted(
+        tokenize(content),
+        key=lambda word: (document_frequency[word], -len(word), word),
+    )[:limit]
+
+
+def neighbour_probes(
+    memory: Memory,
+    memory_pool: Iterable[Memory],
+    *,
+    count: int = NEIGHBOUR_PROBE_COUNT,
+) -> list[str]:
+    """Build questions from neighbours' words, never from M's own words."""
+    pool = [
+        candidate
+        for candidate in memory_pool
+        if candidate.user_id == memory.user_id and candidate.memory_id != memory.memory_id
+    ]
+    # Keep M out of both neighbour selection and the corpus used to choose
+    # distinctive words; otherwise its own vocabulary can leak into its probe.
+    assert all(candidate.memory_id != memory.memory_id for candidate in pool)
+    probes = []
+    for neighbour in nearest_neighbours(memory, pool, count=count):
+        words = _distinctive_words(neighbour.content, pool)
+        if words:
+            probes.append(f"What should I remember about {' '.join(words)}?")
+    return list(dict.fromkeys(probes))
+
+
+def build_probes(
+    memory: Memory,
+    path: Path = CONVERSATIONS_PATH,
+    *,
+    memory_pool: Iterable[Memory] = (),
+) -> list[str]:
+    """Combine seeded conversations with non-circular neighbour questions."""
+    probes = conversation_probes(memory.user_id, path)
+    probes.extend(neighbour_probes(memory, memory_pool))
+    return list(dict.fromkeys(probes))
 
 
 def verdict_for(similarity: float | None) -> str:
@@ -112,6 +181,7 @@ async def evaluate_memory(
     tier: int | None = None,
     record: bool = True,
     probes: Iterable[str] | None = None,
+    memory_pool: Iterable[Memory] | None = None,
 ) -> AblationResult:
     everos = everos or make_everos_client()
     cortex = cortex or make_cortex_client()
@@ -123,7 +193,13 @@ async def evaluate_memory(
         cortex.chunk_delay = 0.0
 
     measurements: list[tuple[float, str, str, str]] = []
-    probe_set = list(probes) if probes is not None else build_probes(memory)
+    if probes is not None:
+        probe_set = list(probes)
+    else:
+        pool = list(memory_pool) if memory_pool is not None else await everos.all_for_user(
+            user_id=memory.user_id
+        )
+        probe_set = build_probes(memory, memory_pool=pool)
     for probe in probe_set:
         memories = await everos.retrieve(user_id=memory.user_id, query=probe)
         if not any(candidate.memory_id == memory.memory_id for candidate in memories):
@@ -164,18 +240,10 @@ async def evaluate_memory(
         note = ""
     else:
         similarity, prompt, baseline_answer, ablated_answer = None, "", "", ""
-        if memory.memory_type in ALWAYS_INJECTED_TYPES:
-            verdict = "evict"
-            note = (
-                "Always-injected memory changed no answer across the realistic probes; "
-                "its standing prompt cost earned no measured influence."
-            )
-        else:
-            verdict = "inconclusive"
-            note = (
-                "Conditionally retrieved memory was not retrieved for any realistic probe; "
-                "no eviction conclusion was made."
-            )
+        verdict = "inconclusive"
+        note = (
+            "Memory was not retrieved for any probe; it is untested, not disposable."
+        )
 
     result = AblationResult(
         memory_id=memory.memory_id,

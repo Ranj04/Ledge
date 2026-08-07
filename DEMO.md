@@ -148,14 +148,15 @@ shows it. **Do at least four turns before pointing at the percentage.**
 > were scored against [the simulator / real Cortex]."* The UI shows the provider state on screen at
 > all times.
 
-**"You're flagging 60% of memories as evictable — really?"** ← *they will ask this*
-> No, and I wouldn't claim it. Against the simulator most memories score exactly 1.0000 — a
-> byte-identical answer — because the simulator only consults the top few relevant memories, so
-> everything else is invisible to it by construction. That's a fact about our stand-in, not about
-> memory. What I'll defend is the pair we planted: it flags the settings-panel log — the single
-> most expensive memory this student has — and it does *not* flag the exam date. That's the harness working in both directions. Run it against
-> real Cortex and the rate drops — that's the first thing we did this morning. [Then give the real
-> number if you have it.]
+**"How do you know those eviction verdicts mean anything?"**
+> Two ways. First, we planted a control pair before we built the harness: a verbose settings-panel
+> log that cannot affect tutoring, and her exam date plus her extra-time accommodation. The harness
+> flags the first and spares the second — a harness that flags everything is as useless as one that
+> flags nothing. Second, every memory is probed with questions built from its *neighbours*, never
+> from itself, so it has to earn its place against everything else the agent already knows. About a
+> quarter come back evictable. And the verdicts are scored against our simulator tonight — the
+> harness is real, the method is sound, and we run it against Cortex this morning for verdicts
+> about a real model.
 
 **"Does reordering hurt answer quality?"**
 > The same content reaches the model either way. In our runs the answers are byte-identical. We'd

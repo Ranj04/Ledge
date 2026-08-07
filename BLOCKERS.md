@@ -73,35 +73,31 @@ that it is not a function that returns "evict" for everything or "keep" for ever
 *What it does not prove:* that any specific memory is genuinely disposable for a real model. A
 lexical composer and Claude do not agree on what is relevant.
 
-### The symptom to be ready for: a 60% eviction rate
+### The eviction rate is now credible, and here is how it got there
 
-Measured on 2026-08-06, sampling 25 memories: **15 came back `evict`.** Both planted memories
-landed correctly — junk at 1.0000 similarity, critical at 0.6671 — so the harness separates the
-cases it was built to separate. But 60% is not a credible claim about a real memory system, and
-nobody should present it as one.
+Measured 2026-08-07, sampling 25 memories: **6 `evict`, 19 `keep`, 0 inconclusive — 24%**, with
+similarity spread across 0.44–1.00 and both planted controls correct (junk `evict` at 1.0000,
+critical `keep` at 0.4541). Every memory was exercised by 23–25 probes that actually retrieved it.
 
-*Why it happens:* the simulator's composer references only the top three lexically-relevant
-memories per answer. Anything outside that set cannot influence the reply, so ablating it produces
-a similarity of exactly 1.0000. The verdict is a true statement about the simulator and a
-misleading one about memory in general.
+It did not start there. Two earlier versions produced numbers nobody should have believed — 60%
+`evict` with a column of identical 1.0000 scores, then 72% after a partial fix — and both were
+artifacts of *method*, invisible in the results table. `DECISIONS.md` D19–D23 has the full account.
+The short version, worth having ready because it is a good answer rather than an awkward one:
 
-*Notice the tell:* the `evict` scores are almost all exactly `1.0000` — byte-identical answers.
-Real ablation produces a spread. A column of perfect ones is the signature of a model that never
-looked at the memory, not of a memory that does not matter.
+1. the simulator's composer consulted only the top three relevant memories, so everything else was
+   invisible to it by construction;
+2. probes were partly synthesised from each memory's own words, which is circular — a memory is
+   always relevant to itself;
+3. probes drawn only from 21 conversation turns could not exercise 156 memories, so most were never
+   tested and defaulted to "changed nothing".
 
-*How to present it:* lead with the two planted memories, which is the claim we can actually
-defend — *"the harness finds the memory that costs the most and changes nothing, and it does not
-flag the one that matters."* If asked about the overall rate, say plainly that the simulator's
-relevance model is coarse, that the real number will be lower, and that this is precisely why the
-panel is labelled as scored against the simulator.
+**What is still true and must still be said:** these verdicts are scored against a lexical stand-in
+for a model. The harness is real, the method is sound, and the two controls come out right in both
+directions — but a lexical composer and Claude do not agree on what is relevant. Tonight proves the
+*harness*; the event proves the *verdicts*.
 
-*To resolve:* `CORTEX_PROVIDER=real .venv/bin/python -m ablation.run --sample 25`. Expect the rate
-to fall substantially. Whatever it becomes is the number to quote.
-
-*On stage, say the true thing:* "the harness is real and the verdicts are computed; tonight it is
-scored against the simulator, and it runs against Cortex from this morning."
-
-*To resolve:* set `CORTEX_PROVIDER=real` and re-run `ablation/`. No code change.
+*To resolve:* `CORTEX_PROVIDER=real .venv/bin/python -m ablation.run --sample 25`. Whatever rate
+that produces is the number to quote.
 
 ## B4 — `CORTEX_REST_API_USAGE_HISTORY` view name and columns unverified
 
