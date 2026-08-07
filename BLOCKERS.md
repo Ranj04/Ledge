@@ -22,22 +22,69 @@ absolutes are wrong, the *percentage* saving is still correct.
 *To resolve:* check the Snowflake consumption table for the deployed model's credit rate and the
 account's credit price, then update `Pricing`.
 
-## B2 — Cortex prompt-caching behaviour is assumed Anthropic-identical
+## B2 — Cortex caching is confirmed; only the `usage` field *names* are unverified
+
+**Status:** mostly resolved from documentation on 2026-08-06. One narrow unknown remains.
+
+**Confirmed by the Cortex REST API docs:**
+
+- Messages endpoint: `POST https://<account>.snowflakecomputing.com/api/v2/cortex/v1/messages`,
+  following the Anthropic Messages specification, Claude models only.
+- Auth: `Authorization: Bearer <token>` — JWT, OAuth token, or PAT.
+- **Prompt caching is explicitly supported** for Claude via the Messages API: add
+  `cache_control: {"type": "ephemeral"}` to content blocks, **maximum 4 cache breakpoints**,
+  **5-minute TTL**. These are exactly the constraints `app/cortex/cache_sim.py` implements, which
+  means the simulator is modelling the documented rule and not a guess.
+- Model identifiers include `claude-opus-5`, `claude-sonnet-4-6`, `claude-sonnet-4-5`,
+  `claude-haiku-4-5`.
+- The Anthropic SDK sends `x-api-key` by default and Cortex wants a Bearer header, so
+  `RealCortexClient` sets `Authorization` explicitly via `default_headers`.
+
+**Still unverified:** whether the response `usage` block carries Anthropic's field names
+`cache_read_input_tokens` and `cache_creation_input_tokens`. The docs list only `prompt_tokens` /
+`completion_tokens` / `total_tokens` for the OpenAI-compatible path and do not spell out the
+Messages-path usage block.
+
+*Mitigation shipped:* `_read_usage` in `app/cortex/real_client.py` tries several spellings and
+reports **zero** if none are present — which understates our own result rather than inventing one,
+and does not crash.
+
+*First thing to run at the event:* `scripts/verify_cortex.py`. It sends the same ~2,000-token
+prefix twice and prints the raw usage block from both calls. If the second call shows a non-zero
+cache-read field, everything downstream works; if the field has a different name, add it to the
+tuples in `_read_usage` — a one-line change.
+
+*If caching turns out to be unsupported on the deployed model:* the demo still stands, because the
+naive-vs-tiered comparison is about layout and the simulator's numbers are honestly labelled as
+simulated. Say so plainly rather than showing a dead meter.
+
+## B3 — Ablation verdicts tonight measure the harness, not the model
+
+**Status:** open by design, resolves at the event.
+
+The ablation harness replays a call with one memory removed and scores how much the answer
+changed. Tonight the answer comes from `MockCortexClient`'s lexical composer (DECISIONS.md D10),
+not from a language model.
+
+*What tonight's run does prove:* that the harness runs, that it scores, that it writes
+`ABLATION_RESULTS`, and that it separates a planted junk memory from a planted critical one — i.e.
+that it is not a function that returns "evict" for everything or "keep" for everything.
+
+*What it does not prove:* that any specific memory is genuinely disposable for a real model. A
+lexical composer and Claude do not agree on what is relevant.
+
+*On stage, say the true thing:* "the harness is real and the verdicts are computed; tonight it is
+scored against the simulator, and it runs against Cortex from this morning."
+
+*To resolve:* set `CORTEX_PROVIDER=real` and re-run `ablation/`. No code change.
+
+## B4 — `CORTEX_REST_API_USAGE_HISTORY` view name and columns unverified
 
 **Status:** open, resolves at the event.
 
-The Cortex REST API is documented as Anthropic-Messages-compatible, which is why we can use the
-Anthropic Python SDK against it with a `base_url` override. We are assuming it therefore honours
-`cache_control: {"type": "ephemeral"}` with Anthropic's semantics: 1,024-token minimum, ≤4
-breakpoints, 5-minute TTL, and `usage.cache_read_input_tokens` /
-`usage.cache_creation_input_tokens` in the response.
+`sql/03_reconcile.sql` compares our `CALL_LOG` against Snowflake's account-usage view for Cortex
+REST calls. Neither the exact view name nor its column set could be checked without an account.
+Every uncertain line is marked `-- VERIFY-AT-EVENT:`.
 
-*Risk:* if Cortex proxies to Bedrock or to its own serving stack, caching may be unsupported, may
-use a different minimum, or may not report cache fields at all.
-
-*Mitigation shipped:* `RealCortexClient` reads cache fields defensively and reports zero rather
-than crashing if they are absent, and every uncertain line is marked `# VERIFY-AT-EVENT:`.
-
-*First thing to run at the event:* `scripts/verify_cortex.py` — sends the same 2,000-token prefix
-twice and prints the raw `usage` block. If `cache_read_input_tokens` is present and non-zero on the
-second call, everything downstream works.
+Note this view lags **up to 45 minutes**. It is a post-hoc credibility check — "our ledger agrees
+with Snowflake's own billing record" — and must never be wired to the live meter.
