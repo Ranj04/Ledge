@@ -81,20 +81,43 @@ class ContentBlock:
 
 
 @dataclass
+class InjectedMemory:
+    """One memory's presence in one assembled prompt."""
+
+    memory_id: str
+    memory_type: MemoryType
+    tier: Tier
+    tokens: int
+    natural_tier: Tier  # tier implied by type, before drift bookkeeping
+
+
+@dataclass
 class AssembledPrompt:
     """The output of the Assembler — everything the Cortex client needs."""
 
     system_blocks: list[ContentBlock]
     messages: list[dict[str, Any]]  # Anthropic Messages format
     mode: Literal["naive", "tiered"]
-    # Ordered memory ids as they appear in the prompt, plus their tier.
-    injected: list[tuple[str, Tier]] = field(default_factory=list)
-    # Token count per tier, for the ledger and the inspector panel.
+    # In prompt order.
+    injected: list[InjectedMemory] = field(default_factory=list)
+    # Tokens of *memory content* at each tier.  Comparable across modes.
     tier_tokens: dict[int, int] = field(default_factory=dict)
+    # Everything that is not memory content: system prompt, section headers,
+    # conversation history, the new user message.
+    overhead_tokens: int = 0
+    # Cumulative prompt tokens through the end of each tier's region.  Lets
+    # telemetry decide whether a given tier was served from cache using only
+    # the aggregate `cached_tokens` that the real API reports.
+    tier_cumulative_tokens: dict[int, int] = field(default_factory=dict)
     breakpoint_count: int = 0
 
     def total_prompt_tokens_estimate(self) -> int:
-        return sum(self.tier_tokens.values())
+        return sum(self.tier_tokens.values()) + self.overhead_tokens
+
+    def tier_was_cached(self, tier: Tier, cached_tokens: int) -> bool:
+        """A tier was served from cache only if the whole prefix through it was."""
+        end = self.tier_cumulative_tokens.get(tier)
+        return end is not None and cached_tokens >= end
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +132,11 @@ class Usage:
     `cached_tokens` is ALWAYS derived — from the real API response, or from the
     simulator's prefix computation.  It is never assigned by us.  See
     DECISIONS.md, "Honesty".
+
+    `input_tokens` is the TOTAL prompt size, i.e. cached + written + ordinary.
+    Note that the Anthropic/Cortex response reports its own `input_tokens` as
+    only the ordinary portion; clients add the three together so that one
+    field means one thing everywhere downstream.
     """
 
     input_tokens: int

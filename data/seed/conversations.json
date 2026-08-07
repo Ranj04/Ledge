@@ -1,0 +1,47 @@
+{
+  "note": "SYNTHETIC SEED DATA",
+  "conversations": [
+    {
+      "conversation_id": "conv_stoich_review",
+      "user_id": "stu_maya_chen",
+      "title": "Stoichiometry review before the unit test",
+      "turns": [
+        "Can you help me with limiting reagents? i always just pick the smaller grams",
+        "ok for 2Al + 3Cl2 -> 2AlCl3, I have 5.4g Al and 12.0g Cl2. where do i start",
+        "I got .20 mol Al and .17 mol chlorine so chlorine limits right?",
+        "wait why are we calculating product from BOTH, isnt comparing moles enough",
+        "can we add percent yield too if the lab actually made 9.1 g",
+        "make me one thats harder with a solution in mL pls",
+        "before I try it, what should I double check so I dont repeat my usual mistakes?"
+      ]
+    },
+    {
+      "conversation_id": "conv_exam_plan",
+      "user_id": "stu_maya_chen",
+      "title": "Backward plan for the AP Chemistry exam",
+      "turns": [
+        "I need an AP chem study plan but not like a giant vague checklist",
+        "can u build it backwards from my actual exam date?",
+        "tues/thurs are still orchestra, and I only have like 25 min other nights",
+        "put redox in basic solution early bc thats def not solid yet",
+        "also mix in equilibrium and Hess law so I dont forget the older stuff",
+        "how should timed practice work with my extra-time thing?",
+        "give me the first 7 days with exact problems or deliverables"
+      ]
+    },
+    {
+      "conversation_id": "conv_algebra_transfer",
+      "user_id": "stu_maya_chen",
+      "title": "Quadratics, functions, and chemistry transfer",
+      "turns": [
+        "Can we warm up with a quadratic? one where b is negative bc I mess that up",
+        "I got x=( -7 plusminus sqrt49-40)/2 ... did I already lose a sign",
+        "how does the discriminant tell me if the graph crosses or just touches",
+        "give me a completing the square one where the x2 coefficient isnt 1",
+        "ok now composition: why is f(g(2)) not f times g times 2",
+        "could an exponential model connect to reaction rate or is that totally different",
+        "end with a 2-question check, one algebra and one chem from last week"
+      ]
+    }
+  ]
+}
