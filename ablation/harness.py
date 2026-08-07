@@ -1,11 +1,19 @@
-"""Replay calls with one memory removed and measure answer influence."""
+"""Replay realistic user questions with one memory removed.
+
+A memory earns its cost by changing the answer to a question the user actually
+asks. The settings-panel log is genuinely relevant to a question *about the
+settings panel* -- and nobody asks the tutor that. Probing with realistic
+questions is what makes ``evict`` mean something.
+
+Probe questions therefore come only from seeded conversation turns. They are
+never synthesized from the memory under test, which would make the test
+circular by manufacturing a question that is guaranteed to concern the item.
+"""
 
 from __future__ import annotations
 
 import json
-import re
 import uuid
-from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,16 +34,7 @@ EVICT_MIN_SIMILARITY = 0.98
 KEEP_MAX_SIMILARITY = 0.90
 
 CONVERSATIONS_PATH = Path("data/seed/conversations.json")
-
-_PROBE_STOPWORDS = {
-    "about", "after", "again", "also", "and", "apart", "back", "before", "but",
-    "can", "change", "chose", "closed", "content", "could", "default", "did",
-    "does", "every", "for", "from", "had", "has", "have", "help", "how", "into",
-    "its", "left", "memory", "more", "not", "only", "opened", "over", "present",
-    "question", "returned", "should", "student", "that", "the", "their", "them",
-    "then", "there", "these", "they", "this", "through", "to", "was", "were",
-    "what", "when", "which", "with", "would", "you", "your",
-}
+ALWAYS_INJECTED_TYPES = frozenset({"profile", "procedural"})
 
 
 @dataclass
@@ -83,34 +82,9 @@ def conversation_probes(user_id: str, path: Path = CONVERSATIONS_PATH) -> list[s
     ]
 
 
-def distinctive_words(content: str, limit: int = 6) -> list[str]:
-    words = [
-        word
-        for word in re.findall(r"[a-z0-9]+(?:[.×][a-z0-9]+)?", content.lower())
-        if len(word) >= 4 and word not in _PROBE_STOPWORDS
-    ]
-    counts = Counter(words)
-    # Prefer rare, long terms. Stable alphabetical tie-breaking makes probes
-    # reproducible and avoids any memory-id-based behavior.
-    return sorted(counts, key=lambda word: (counts[word], -len(word), word))[:limit]
-
-
-def memory_probes(memory: Memory) -> list[str]:
-    words = distinctive_words(memory.content)
-    if not words:
-        return ["Could any detail here affect how you help me study this topic?"]
-    # One distinctive term per natural-language probe is enough to make the
-    # item retrievable without turning a useless fact into the subject of the
-    # answer. The conversation probes supply the stronger, real-use queries.
-    return [
-        f"Would {word} matter while solving an unfamiliar homework problem?"
-        for word in words[:3]
-    ][:3]
-
-
-def build_probes(memory: Memory) -> list[str]:
-    # dict preserves order while removing duplicate synthetic/conversation turns.
-    return list(dict.fromkeys(conversation_probes(memory.user_id) + memory_probes(memory)))
+def build_probes(memory: Memory, path: Path = CONVERSATIONS_PATH) -> list[str]:
+    """Return real questions for this user without consulting memory content."""
+    return list(dict.fromkeys(conversation_probes(memory.user_id, path)))
 
 
 def verdict_for(similarity: float | None) -> str:
@@ -149,7 +123,8 @@ async def evaluate_memory(
         cortex.chunk_delay = 0.0
 
     measurements: list[tuple[float, str, str, str]] = []
-    for probe in probes or build_probes(memory):
+    probe_set = list(probes) if probes is not None else build_probes(memory)
+    for probe in probe_set:
         memories = await everos.retrieve(user_id=memory.user_id, query=probe)
         if not any(candidate.memory_id == memory.memory_id for candidate in memories):
             continue
@@ -185,10 +160,22 @@ async def evaluate_memory(
     if measurements:
         worst = min(measurements, key=lambda item: item[0])
         similarity, prompt, baseline_answer, ablated_answer = worst
+        verdict = verdict_for(similarity)
         note = ""
     else:
         similarity, prompt, baseline_answer, ablated_answer = None, "", "", ""
-        note = "Target memory was not retrieved for any probe; no eviction conclusion was made."
+        if memory.memory_type in ALWAYS_INJECTED_TYPES:
+            verdict = "evict"
+            note = (
+                "Always-injected memory changed no answer across the realistic probes; "
+                "its standing prompt cost earned no measured influence."
+            )
+        else:
+            verdict = "inconclusive"
+            note = (
+                "Conditionally retrieved memory was not retrieved for any realistic probe; "
+                "no eviction conclusion was made."
+            )
 
     result = AblationResult(
         memory_id=memory.memory_id,
@@ -198,7 +185,7 @@ async def evaluate_memory(
         tokens=count_tokens(f"- {memory.content}\n"),
         monthly_cost_usd=float(monthly_cost_usd or 0.0),
         similarity=similarity,
-        verdict=verdict_for(similarity),
+        verdict=verdict,
         prompt=prompt,
         baseline_answer=baseline_answer,
         ablated_answer=ablated_answer,

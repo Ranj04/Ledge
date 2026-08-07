@@ -765,6 +765,13 @@ textarea:focus-visible {
   color: var(--cached);
 }
 
+.cache-write-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .cache-rate {
   display: grid;
   gap: 7px;

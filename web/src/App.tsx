@@ -296,6 +296,9 @@ function CostMeter({ latest, callCosts, streaming }: { latest?: DonePayload; cal
             {formatMoney(animatedSaved)} {savingsPercent === undefined ? '' : `(${Math.round(savingsPercent * 100)}%)`}
           </strong>
         </div>
+        {session?.saved_usd !== undefined && session.saved_usd < 0 && (
+          <p className="cache-write-note">First turn writes the cache — this pays back from turn two.</p>
+        )}
       </div>
 
       <div className="cache-rate">

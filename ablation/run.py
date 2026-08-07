@@ -53,11 +53,15 @@ def _select(memories, costs, args: argparse.Namespace):
 
 
 def _print_table(results: list[AblationResult]) -> None:
-    headers = ("memory id", "type", "tier", "tokens", "projected monthly", "min similarity", "verdict")
+    headers = (
+        "memory id", "type", "injection", "tier", "tokens",
+        "projected monthly", "min similarity", "verdict",
+    )
     rows = [
         (
             result.memory_id,
             result.memory_type,
+            "always" if result.memory_type in ("profile", "procedural") else "conditional",
             str(result.tier),
             str(result.tokens),
             f"${result.monthly_cost_usd:.2f}",
@@ -71,6 +75,10 @@ def _print_table(results: list[AblationResult]) -> None:
     print("  ".join("-" * width for width in widths))
     for row in rows:
         print("  ".join(row[i].ljust(widths[i]) for i in range(len(headers))))
+    print("\nInjection policy: profile/procedural = always; semantic/episodic = conditional.")
+    for result in results:
+        if result.note:
+            print(f"Note {result.memory_id}: {result.note}")
 
 
 async def main() -> None:
