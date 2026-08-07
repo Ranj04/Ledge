@@ -240,6 +240,32 @@ def test_inspect_marks_which_boundaries_actually_cache(client):
     )
 
 
+def test_the_tutor_remembers_across_sessions(client):
+    """A turn becomes an episodic memory, and a brand-new session retrieves it.
+    This is what makes the memory pressure real rather than staged."""
+    send(client, "I keep mixing up titration endpoints and equivalence points", session="sessA")
+
+    written = [
+        m
+        for m in client.get("/api/memories", params={"user_id": USER}).json()
+        if m["metadata"].get("source") == "live-session" and "titration" in m["content"]
+    ]
+    assert written, "the turn should have been written back as an episodic memory"
+
+    body = client.post(
+        "/api/inspect",
+        json={"user_id": USER, "message": "remind me about titration endpoints",
+              "session_id": "sessB"},
+    ).json()
+    tiered = body["modes"]["tiered"]
+    injected = {i for b in tiered["blocks"] for i in b["memory_ids"]}
+    injected |= {i for m in tiered["messages"] for i in m.get("memory_ids", [])}
+
+    assert written[0]["memory_id"] in injected, (
+        "a memory written in one session must be retrievable in the next"
+    )
+
+
 def test_inspect_does_not_disturb_the_live_session(client):
     """An inspector that warmed the cache would change the thing it inspects."""
     send(client, "help with limiting reagents", session="quiet")

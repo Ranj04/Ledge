@@ -332,6 +332,12 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
                     "cacheable": part.get("cache_control") is not None
                     and cumulative >= min_cacheable,
                     "carries_tiers": carries,
+                    # Parity with `blocks`: which memories are actually in here.
+                    # `preview` truncates, so this is the only reliable way to
+                    # tell what the volatile band contains.
+                    "memory_ids": [
+                        i.memory_id for i in prompt.injected if i.tier in carries
+                    ],
                     "label": _message_label(msg["role"], carries),
                     "preview": text[:400],
                 }

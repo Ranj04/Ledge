@@ -92,7 +92,33 @@ Once it prints CACHING CONFIRMED, set `CORTEX_PROVIDER=real` in `.env` and resta
 
 **Expect:** the banner now reads `LIVE — real Cortex`, and a real spread rather than a near-zero
 stdev. **Write the new numbers down** — they replace every number in `DEMO.md`. The reduction
-percentage may differ from 36.7%; whatever it is, that is the number you quote.
+percentage may differ from 46.5%; whatever it is, that is the number you quote.
+
+### Step 2b — re-measure the layout (5 min, worth it)
+
+The shipped layout was chosen by measurement against the simulator, not by argument
+(`DECISIONS.md` D17). It depends on how much the retrieved semantic set churns turn to turn, which
+real EverOS may do differently. Two module-level constants in `app/assembler/assemble.py` select
+the variants:
+
+```python
+TIER2_PLACEMENT = "message"   # "message" | "system"
+CACHE_HISTORY   = True        # True | False
+```
+
+Measured against simulators, three conversations:
+
+| `TIER2_PLACEMENT` | `CACHE_HISTORY` | hit rate | reduction |
+|---|---|---|---|
+| `"system"` | `True` | 56.6% | 36.9% |
+| `"system"` | `False` | 56.3% | 39.2% |
+| **`"message"`** | **`True`** | **64.3%** | **46.5%** ← shipped |
+| `"message"` | `False` | 55.9% | 40.8% |
+
+Edit the two constants, run `scripts/experiment.py --runs 4` for each of the four combinations,
+and ship whichever wins against real Cortex. It is four edits and four runs. If `"message"/True`
+still wins, say nothing about it on stage; if a different one wins, that is a *better* story —
+you measured, and the answer changed with real infrastructure.
 
 ---
 
