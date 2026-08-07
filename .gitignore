@@ -1,0 +1,17 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+web/dist/
+web/node_modules/
+data/*.db
+data/*.db-journal
+data/*.sqlite
+.sol/logs/
+.DS_Store
+*.egg-info/
+.coverage
+htmlcov/

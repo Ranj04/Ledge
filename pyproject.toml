@@ -1,0 +1,14 @@
+[project]
+name = "memoryledger"
+version = "0.1.0"
+description = "Cache-aware memory layout and a per-memory cost ledger for AI agents"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
