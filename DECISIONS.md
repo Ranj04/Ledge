@@ -192,3 +192,106 @@ Six-turn scripted conversation, demo student, simulators, identical memory sets:
 
 **35.0% lower cost for the same conversation.** Every figure derived from the prefix computation in
 `app/cortex/cache_sim.py`; none assigned.
+
+---
+
+## Phase 4 — Correcting the instrument, and what it changed
+
+### D16. The cache simulator was wrong about how a hit is found, and fixing it changed a design decision
+
+**This is the most important correction of the build.** The first version of `PromptCacheSimulator`
+looked for a cache hit only at breakpoints present in *the current request*. That is not the rule.
+From Anthropic's prompt-caching documentation, which Cortex's Messages API follows:
+
+> On each request the system computes the prefix hash at your breakpoint and checks for a matching
+> cache entry. If none exists, it walks backward one block at a time, checking whether the prefix
+> hash at each earlier position matches something already in the cache. The lookback window is 20
+> blocks.
+
+So **writes happen only at breakpoints, but reads do not.** A hit can land at a position that is
+not a breakpoint in this request, provided an earlier request wrote an entry there. That is exactly
+what makes a *growing* conversation cache: turn N writes an entry at the end of its history, and
+turn N+1 — whose breakpoint has moved further along — walks back and finds it.
+
+*What the error would have cost us:* under the wrong model the conversation-history breakpoint
+could never be read, so it looked like a pure 1.25× write penalty, and the obvious "fix" was to
+remove it. We would have removed a breakpoint that works, and reported a lower saving, and been
+confidently wrong on stage about why.
+
+`tests/test_cache_sim.py` now pins the lookback directly: the documented multi-turn case, the
+20-block window boundary (19 blocks hits, 30 misses), that the longest match across all breakpoints
+wins, and that a read can land where this request has no breakpoint.
+
+*Also corrected:* the 1,024-token minimum is model-dependent — 1,024 for Sonnet 4.5/4.6 and
+Opus 4.8, **512** for Opus 5 and Fable 5. It was already configurable via `MIN_CACHEABLE_TOKENS`;
+now it is documented. If the event runs on Opus 5, lowering it makes more tiers eligible.
+
+### D17. Layout is ordered by *measured prefix stability*, not by tier number
+
+The brief specified breakpoints after tiers 0, 1 and 2, with tier 3 uncached. We measured four
+layouts and shipped a different one. Same conversations, same memories, simulators, three
+conversations:
+
+| layout | breakpoints | cache hit | cost/conversation | reduction |
+|---|---|---|---|---|
+| tier 2 in system block, history breakpoint *(as specified)* | 4 | 56.6% | $0.053749 | 36.93% |
+| tier 2 in system block, no history breakpoint | 3 | 56.3% | $0.051799 | 39.22% |
+| **tier 2 behind history, history breakpoint** | **3** | **64.3%** | **$0.045592** | **46.50%** |
+| tier 2 behind history, no history breakpoint | 2 | 55.9% | $0.050475 | 40.78% |
+
+**Why the winner wins.** Conversation history is *append-only*: its prefix never changes, it only
+grows, which makes it excellent cache material. Tier 2 is a top-k semantic retrieval that
+reshuffles with every question. With tier 2 in front, every turn changed the history's prefix and
+the history entry could never be read back — **a churning block poisons every stable block behind
+it.** That is the product's own thesis, and we had been applying it only inside the system block
+instead of across the whole prompt.
+
+Ordering by prefix stability rather than by tier number gives: **0, 1, conversation history, 2, 3.**
+
+Two things worth saying plainly:
+
+* **This is a deviation from the brief, made on evidence.** The tiering concept is unchanged and
+  the four EverOS types still define volatility. What changed is that the conversation turned out
+  to be more prefix-stable than a top-k retrieval, so it sits ahead of it.
+* **It is contingent on retrieval behaviour, not a universal law.** If semantic retrieval were
+  stable turn to turn, tier 2 would belong in the system block. `TIER2_PLACEMENT` and
+  `CACHE_HISTORY` in `app/assembler/assemble.py` exist so this can be re-measured at the event
+  against real Cortex and real EverOS in one line. Re-run
+  `scripts/experiment.py` with each setting and take the winner.
+
+We use **3 of the 4 available breakpoints**, deliberately. The fourth would have to go on a tier
+that churns, and a breakpoint whose content changes every turn costs 1.25× to write and is never
+read.
+
+### D18. A breakpoint needs a 21.7% hit rate to pay for itself
+
+Derived from the rate table, and worth stating because it is the test for whether a breakpoint
+belongs anywhere: writing costs **1.25×** base input and reading costs **0.1×**, so with hit
+probability *q* the expected multiplier is `q·0.1 + (1−q)·1.25`. That falls below the uncached
+1.0× only when **q > (1.25 − 1) / (1.25 − 0.1) = 21.7%**.
+
+Measured under the shipped layout: tier 0 and tier 1 both hit **85.7%** — expected multiplier
+0.264, comfortably worth it. Nothing else clears the bar, which is why nothing else has a
+breakpoint.
+
+*A trap worth recording:* our first reading of this said the tier-2 breakpoint was a 19.5% loss and
+should be removed. That was wrong. Cache-write tokens are counted over the whole region from the
+hit to the **last** eligible breakpoint, so removing an *interior* breakpoint does not move its
+content out of the write region — a later breakpoint still forces the write. Only the **last**
+breakpoint sets the write ceiling. The break-even test applies to where the last breakpoint goes,
+not to interior ones.
+
+### Measured result after Phase 4
+
+Six-turn to eight-turn conversations, demo student, simulators, identical memory sets both modes:
+
+| | naive | tiered |
+|---|---|---|
+| cost per conversation | $0.085226 | **$0.045592** |
+| cache hit rate | 0.0% | **64.3%** |
+| breakpoints | 0 | 3 |
+| prompt size | 24,260 tok | 24,372 tok |
+| answers | *identical in 18/18 runs* | |
+
+**46.5% lower cost, mean over 18 runs; range 46.1%–47.2%, stdev 0.49%.**
+Up from 36.7% before the instrument was corrected and the layout re-measured.

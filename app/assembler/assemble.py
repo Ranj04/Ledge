@@ -44,6 +44,26 @@ from app.cortex.tokens import count_tokens
 
 EPHEMERAL = {"type": "ephemeral"}
 
+# Whether conversation history gets a breakpoint. It is the *last* breakpoint,
+# so it sets the ceiling of the cache-write region. Only worth placing if
+# everything in front of it is stable — see TIER2_PLACEMENT.
+CACHE_HISTORY = True
+
+# Where tier 2 (semantic) sits: in the system block, or attached to the final
+# user turn behind the conversation history.
+#
+# This is the least obvious call in the Assembler and it was decided by
+# measurement, not by argument. See DECISIONS.md D17.
+#
+# Conversation history is *append-only*: its prefix never changes, only grows,
+# which makes it excellent cache material. Tier 2 is a top-k retrieval that
+# reshuffles with every question. Putting a churning block in front of a stable
+# one poisons the stable one — the whole point of the product, applied to the
+# message list rather than the system block.
+#
+# So ordering by prefix-stability, not by tier number: 0, 1, history, 2, 3.
+TIER2_PLACEMENT = "message"  # "system" | "message"
+
 SYSTEM_PROMPT = """You are a patient, precise study tutor.
 
 Work with one student at a time on the subject they raise. Explain in small
@@ -213,7 +233,8 @@ def _assemble_tiered(
         )
     )
 
-    for tier in (1, 2):
+    system_tiers = (1,) if TIER2_PLACEMENT == "message" else (1, 2)
+    for tier in system_tiers:
         if not by_tier[tier]:
             continue
         system_blocks.append(
@@ -232,7 +253,7 @@ def _assemble_tiered(
     # — or the volatile memories would invalidate the history segment on every
     # turn and the breakpoint would be worthless.
     messages: list[dict] = [dict(m) for m in history]
-    if messages:
+    if messages and CACHE_HISTORY:
         last = messages[-1]
         messages[-1] = {
             "role": last["role"],
@@ -245,10 +266,12 @@ def _assemble_tiered(
             ],
         }
 
-    tier3_text = ""
+    trailing = ""
+    if TIER2_PLACEMENT == "message" and by_tier[2]:
+        trailing += _block_text(TIER_HEADERS[2], by_tier[2]) + "\n"
     if by_tier[3]:
-        tier3_text = _block_text(TIER_HEADERS[3], by_tier[3]) + "\n"
-    messages.append({"role": "user", "content": tier3_text + user_message})
+        trailing += _block_text(TIER_HEADERS[3], by_tier[3]) + "\n"
+    messages.append({"role": "user", "content": trailing + user_message})
 
     # --- accounting -------------------------------------------------------
     injected = [
@@ -287,7 +310,7 @@ def _assemble_tiered(
         tier_tokens=tier_tokens,
         overhead_tokens=max(0, total - memory_tokens),
         tier_cumulative_tokens=tier_cumulative,
-        breakpoint_count=len(system_blocks) + (1 if history else 0),
+        breakpoint_count=len(system_blocks) + (1 if history and CACHE_HISTORY else 0),
     )
 
 

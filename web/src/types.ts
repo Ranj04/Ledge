@@ -82,6 +82,8 @@ export interface InspectMessage {
   tokens?: number
   is_breakpoint: boolean
   cacheable: boolean
+  carries_tiers?: number[]
+  label?: string
   preview: string
 }
 
@@ -124,6 +126,7 @@ export interface MemoryCost {
   content_hash?: string
   stable_calls?: number
   monthly_cost_usd: number
+  cost_per_1k_calls_usd: number
 }
 
 export interface MemoryBody {

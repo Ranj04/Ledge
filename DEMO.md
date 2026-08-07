@@ -32,7 +32,7 @@ live ones.** Say the real number, whatever it is.
 > front of the prompt changes every turn, and the cache never hits. **Zero.** You pay full price
 > for the same hundred and fifty memories, over and over."
 
-*Point at:* the single 2,949-token block in the naive column, no boundaries anywhere.
+*Point at:* the single ~2,900-token block in the naive column, no boundaries anywhere.
 
 > "That's not a strawman. That's what you get from any RAG tutorial: retrieve, sort by relevance,
 > put it at the front. Nobody's doing anything wrong."
@@ -51,7 +51,15 @@ live ones.** Say the real number, whatever it is.
 >
 > Stable first, volatile last, and a cache breakpoint at each boundary."
 
-*Point at:* the three `CACHE BOUNDARY · PREFIX ELIGIBLE` rules.
+*Point at:* the `CACHE BOUNDARY · PREFIX ELIGIBLE` rules — after the skills, after the profile,
+and after the conversation so far.
+
+> "One thing we got wrong first and had to measure our way out of: the conversation itself is the
+> *most* stable thing in the prompt. It only ever grows — nothing already said changes. Whereas the
+> retrieved facts reshuffle with every question. So the conversation goes in *front* of them.
+> Putting anything churny ahead of something stable poisons it."
+
+*(That change alone took us from 37% to 46%. It is in `DECISIONS.md` D17 if anyone asks.)*
 
 > "And here's the part we didn't have to invent — **those four tiers are EverOS's own memory
 > types.** Profile, semantic, skills, episodic. A good memory layer already knows how volatile
@@ -61,8 +69,12 @@ live ones.** Say the real number, whatever it is.
 
 *Point at:* the per-call cost bars.
 
-> "Same question. Same memories. Same answer — we check that, byte for byte. **Thirty-seven
+> "Same question. Same memories. Same answer — we check that, byte for byte. **Forty-six
 > percent cheaper.**"
+
+*Watch out:* the saving builds over a conversation, because the first turn pays to write the cache
+and has nothing to read. Turn one shows a small **negative** saving — that is real and the meter
+shows it. **Do at least four turns before pointing at the percentage.**
 
 ---
 
@@ -75,7 +87,7 @@ live ones.** Say the real number, whatever it is.
 
 *Point at:* the top row.
 
-> "This is Maya's most expensive memory. Thirty-three dollars a month."
+> "This is Maya's most expensive memory. Top of the list, every month, by a clear margin."
 
 *Do:* expand it.
 
@@ -123,10 +135,12 @@ live ones.** Say the real number, whatever it is.
 > have shipped without this.
 
 **"How do you know the caching numbers are real?"**
-> Cortex's Messages API takes Anthropic-style `cache_control`, max four breakpoints, five-minute
-> TTL, thousand-token minimum. Our simulator implements that rule — byte-exact prefix matching, not
-> a fudge factor — and our real Assembler runs against it. `cached_tokens` is always derived, never
-> assigned. [If step 2 passed: *"and we're running against real Cortex right now."*]
+> Cortex's Messages API takes Anthropic-style `cache_control`: max four breakpoints, five-minute
+> TTL, thousand-token minimum, writes only at breakpoints, and reads that walk back up to twenty
+> blocks. Our simulator implements that rule — byte-exact prefix hashing, not a fudge factor — and
+> our real Assembler runs against it. `cached_tokens` is always derived, never assigned. We know it
+> matters because we got the lookback wrong at first and it changed a design decision.
+> [If step 2 passed: *"and we're running against real Cortex right now."*]
 
 **"What's simulated?"**
 > Be specific, do not hedge: *"Cache accounting is computed from Snowflake's documented billing
@@ -138,8 +152,8 @@ live ones.** Say the real number, whatever it is.
 > No, and I wouldn't claim it. Against the simulator most memories score exactly 1.0000 — a
 > byte-identical answer — because the simulator only consults the top few relevant memories, so
 > everything else is invisible to it by construction. That's a fact about our stand-in, not about
-> memory. What I'll defend is the pair we planted: it flags the $33-a-month settings log and it
-> does *not* flag the exam date. That's the harness working in both directions. Run it against
+> memory. What I'll defend is the pair we planted: it flags the settings-panel log — the single
+> most expensive memory this student has — and it does *not* flag the exam date. That's the harness working in both directions. Run it against
 > real Cortex and the rate drops — that's the first thing we did this morning. [Then give the real
 > number if you have it.]
 
@@ -158,9 +172,17 @@ live ones.** Say the real number, whatever it is.
 > mid-session — a flickering memory would otherwise oscillate and invalidate the cache every turn.
 
 **"Four breakpoints isn't many."**
-> It's exactly enough: three tier boundaries plus the conversation history. That's why the volatile
-> memories are attached to the last user turn instead of the system block — if they sat in front of
-> the history they'd invalidate it every turn and the fourth breakpoint would be worthless.
+> We only use three, and that's deliberate. Skills, profile, conversation. The fourth would have to
+> go on content that changes every turn, and a breakpoint you write at 1.25× and never read back is
+> just a bill. There's a clean threshold: a breakpoint pays only above a 21.7% hit rate. Ours run
+> at 86%.
+
+**"Why is the conversation cached before the retrieved facts? That seems backwards."**
+> It surprised us too — we had it the other way round and measured our way out of it. The
+> conversation is append-only: nothing already said ever changes, it only grows. A top-k retrieval
+> reshuffles on every question. So by prefix stability the conversation is the *more* stable of the
+> two, and anything churny in front of it destroys it. Moving the retrieved facts behind the
+> conversation took us from 37% to 46%.
 
 ---
 

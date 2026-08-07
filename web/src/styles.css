@@ -596,6 +596,10 @@ textarea:focus-visible {
   background: #141b20;
 }
 
+.prompt-band.conversation-band {
+  border-left-color: var(--line-strong);
+}
+
 .prompt-band.tier-0 {
   border-left-color: var(--tier-0);
 }
@@ -610,6 +614,16 @@ textarea:focus-visible {
 
 .prompt-band.tier-3 {
   border-left-color: var(--tier-3);
+}
+
+.prompt-band.carries-tiers--2-3 {
+  border-left-color: var(--tier-2);
+  background-color: #141b20;
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--tier-2) 18%, transparent) 0 12px,
+    color-mix(in srgb, var(--tier-3) 18%, transparent) 12px 24px
+  );
 }
 
 .band-heading {
@@ -1095,7 +1109,8 @@ textarea:focus-visible {
 .memory-table th:nth-child(3) { width: 70px; }
 .memory-table th:nth-child(4) { width: 88px; }
 .memory-table th:nth-child(5) { width: 140px; }
-.memory-table th:nth-child(6) { width: 142px; }
+.memory-table th:nth-child(6) { width: 138px; }
+.memory-table th:nth-child(7) { width: 142px; }
 
 .memory-table .highest-cost td {
   background: #17211f;

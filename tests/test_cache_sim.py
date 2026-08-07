@@ -140,6 +140,98 @@ def test_block_boundaries_are_part_of_prompt_identity():
 
 
 # ---------------------------------------------------------------------------
+# Rule 6 — writes happen at breakpoints, reads walk backward 20 blocks
+#
+# This is the rule an earlier version of this module got wrong. It only checked
+# for hits at the *current* request's breakpoints, which made a growing
+# conversation look uncacheable and nearly cost us a breakpoint that works.
+# ---------------------------------------------------------------------------
+
+
+def test_a_growing_conversation_reads_the_previous_turns_entry():
+    """The documented multi-turn case. Turn N writes an entry at the end of its
+    history; turn N+1's breakpoint has moved further along, so it only hits by
+    walking backward to the position turn N wrote."""
+    s = sim()
+    system = SimBlock(text_of_tokens(1200, "[sys] "), False, "system", 0)
+    turns = [SimBlock(text_of_tokens(60, f"[turn{i}] "), False, f"turn {i}", 3)
+             for i in range(6)]
+
+    # Turn 1: system + 2 turns, breakpoint on the last one.
+    first = [system, turns[0], SimBlock(turns[1].text, True, "turn 1", 3)]
+    out1 = s.process(first, session_id="c", now=0.0)
+    assert out1.cached_tokens == 0 and out1.cache_write_tokens > 0
+
+    # Turn 2: two more blocks appended, breakpoint moves to the new last block.
+    # Its prefix hash is new, so the only way to hit is the backward walk.
+    second = [system, turns[0], turns[1], turns[2],
+              SimBlock(turns[3].text, True, "turn 3", 3)]
+    out2 = s.process(second, session_id="c", now=10.0)
+
+    assert out2.cached_tokens == out1.cache_write_tokens, (
+        "turn 2 must read exactly the prefix turn 1 wrote"
+    )
+    assert out2.cache_write_tokens == count_tokens(turns[2].text) + count_tokens(turns[3].text)
+
+
+def _appended(head_text: str, n: int) -> list[SimBlock]:
+    """A prompt whose only breakpoint is the last of `n` appended blocks, so a
+    hit can only come from walking backward to the head."""
+    blocks = [SimBlock(head_text, False, "head", 0)]
+    blocks += [SimBlock(f"tail block {i} ", False, "tail", 3) for i in range(n)]
+    blocks[-1] = SimBlock(blocks[-1].text, True, "bp", 3)
+    return blocks
+
+
+def test_the_lookback_window_is_twenty_blocks():
+    head_text = text_of_tokens(1200, "[head] ")
+    written = [SimBlock(head_text, True, "head", 0)]
+
+    s = sim()
+    s.process(written, session_id="w", now=0.0)
+    # 19 blocks appended: the breakpoint's window still reaches the head entry.
+    assert s.process(_appended(head_text, 19), session_id="w", now=1.0).cached_tokens > 0
+
+    s = sim()
+    s.process(written, session_id="w", now=0.0)
+    # 30 blocks appended: the head entry falls outside the 20-block window.
+    assert s.process(_appended(head_text, 30), session_id="w", now=1.0).cached_tokens == 0
+
+
+def test_the_hit_is_the_longest_match_across_all_breakpoints():
+    """A far breakpoint's window can miss what a nearer one reaches, so the
+    search cannot stop at the first breakpoint it tries."""
+    head_text = text_of_tokens(1200, "[head] ")
+    s = sim()
+    s.process([SimBlock(head_text, True, "head", 0)], session_id="m", now=0.0)
+
+    # Two breakpoints: one 30 blocks out (window misses the head entry), and
+    # one 5 blocks out (window reaches it).
+    blocks = [SimBlock(head_text, False, "head", 0)]
+    blocks += [SimBlock(f"filler {i} ", False, "f", 3) for i in range(30)]
+    blocks[5] = SimBlock(blocks[5].text, True, "near bp", 3)
+    blocks[-1] = SimBlock(blocks[-1].text, True, "far bp", 3)
+
+    out = s.process(blocks, session_id="m", now=1.0)
+    assert out.cached_tokens == count_tokens(head_text), (
+        "the near breakpoint's lookback should find the head entry"
+    )
+
+
+def test_reads_can_land_where_this_request_has_no_breakpoint():
+    s = sim()
+    a = SimBlock(text_of_tokens(1100, "[a] "), True, "a", 0)
+    b = SimBlock(text_of_tokens(300, "[b] "), False, "b", 3)
+
+    s.process([a], session_id="p", now=0.0)  # writes an entry at end of `a`
+
+    # `a` is no longer a breakpoint; the only breakpoint is at the end of `b`.
+    later = [SimBlock(a.text, False, "a", 0), SimBlock(b.text, True, "b", 3)]
+    out = s.process(later, session_id="p", now=1.0)
+    assert out.cached_tokens == count_tokens(a.text)
+
+
+# ---------------------------------------------------------------------------
 # Rule 4 — the 1,024-token minimum
 # ---------------------------------------------------------------------------
 

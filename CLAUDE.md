@@ -49,10 +49,11 @@ architecture:
 `MockCortexClient` faithfully implements the **prompt-caching billing rule**. It does not return
 invented numbers:
 
-- Keeps the previous request's assembled blocks in memory, keyed by session.
-- Computes the longest common **byte-exact prefix** against the previous request, respecting
-  breakpoint boundaries — a segment counts as hit only if everything before *and including* it is
-  unchanged.
+- Keeps a content-addressed store of every eligible prefix written in the session, with a TTL.
+- Computes **byte-exact prefix hashes at every block boundary**. Writes happen only at breakpoints;
+  **reads walk backward up to 20 blocks** from each breakpoint looking for an entry an earlier
+  request wrote. That lookback is what makes a growing conversation cache — get it wrong and the
+  conversation-history breakpoint looks worthless (DECISIONS.md D16).
 - Enforces the real constraints: **1,024-token minimum** before anything caches, **≤4 breakpoints**,
   **5-minute TTL** (timestamps tracked and expired).
 - Derives `cached_tokens` from that computation.
@@ -100,10 +101,24 @@ EverOS's own memory types map onto volatility. Use them; do not invent a classif
 |---|---|---|---|
 | 0 Frozen | system prompt + `procedural` (Skills) | deploy-time only | yes |
 | 1 Durable | `profile` | weeks–months | yes |
-| 2 Slow | `semantic` | days | yes |
-| 3 Volatile | `episodic` + the new user message | every turn | **no** |
+| 2 Slow | `semantic` | days (but the retrieved *subset* churns per query) | no |
+| 3 Volatile | `episodic` + the new user message | every turn | no |
 
-Breakpoints go after tiers 0, 1, 2. Tier 3 is never cached and should not be.
+**Prompt order is by measured prefix stability, not by tier number:**
+
+```
+tier 0 (system + skills)   [BREAKPOINT]
+tier 1 (profile)           [BREAKPOINT]
+conversation history       [BREAKPOINT]
+tier 2 + tier 3            attached to the final user turn, never cached
+the student's question
+```
+
+Conversation history is **append-only** — its prefix never changes, it only grows — so it caches
+better than a top-k semantic retrieval that reshuffles every question. A churning block poisons
+every stable block behind it, so tier 2 rides behind the history rather than in front of it.
+Three breakpoints of the four available; the fourth would have to sit on churning content.
+Measured: 36.9% -> 46.5% cost reduction. Full working in DECISIONS.md D17.
 
 **Tier drift:** if a tier-1 memory's content changes, the cache for tiers 1–3 invalidates on the
 next call. Promote a memory to a slower tier only after it has been content-stable for

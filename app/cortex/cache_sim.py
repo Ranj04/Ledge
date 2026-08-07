@@ -15,12 +15,27 @@ The rule, as Anthropic documents it and as Cortex is expected to inherit it
    through the end of that block.  Caching is prefix-based — a segment is only
    reusable if *everything before and including it* is byte-identical.
 4. A prefix shorter than 1,024 tokens never caches, even with a breakpoint on
-   it.  The breakpoint is silently ignored.
+   it.  The breakpoint is silently ignored.  (The minimum is model-dependent:
+   1,024 for Sonnet 4.5/4.6 and Opus 4.8, 512 for Opus 5 and Fable 5.  It is
+   configurable via ``MIN_CACHEABLE_TOKENS``.)
 5. Cache entries live 5 minutes, refreshed on each hit.
-6. On a request: find the **longest** eligible prefix already in the cache.
-   Those are ``cache_read_input_tokens``.  Everything from there to the last
-   eligible breakpoint is written to cache: ``cache_creation_input_tokens``.
+6. **Writes happen only at breakpoints. Reads do not.**  On each request the
+   system hashes the prefix at each breakpoint and looks for a matching entry;
+   if there is none it **walks backward one block at a time**, up to a
+   **20-block lookback window**, checking each earlier position.  So a hit can
+   land at a position that is not a breakpoint in *this* request, as long as
+   some earlier request wrote an entry there.
+7. Tokens up to the hit are ``cache_read_input_tokens``.  Everything from there
+   to the last eligible breakpoint is ``cache_creation_input_tokens``.
    Everything after the last breakpoint is ordinary input.
+
+Rule 6 is the one that is easy to get wrong, and getting it wrong is expensive
+in both directions.  It is what makes a *growing* conversation cache: turn N
+writes an entry at the end of its history, and turn N+1 — whose breakpoint has
+moved further along — walks back and finds it.  An earlier version of this
+module only checked at the current request's breakpoints, which made the
+conversation-history breakpoint look like a pure 1.25x loss and would have led
+us to remove it.  The instrument was wrong, so the design conclusion was wrong.
 
 The consequence that makes this worth building: change one byte anywhere in
 tier 1 and every prefix that contains tier 1 — that is, tiers 1, 2 and 3 —
@@ -96,6 +111,11 @@ class PromptCacheSimulator:
     different profile memories, so their prefixes differ from block 2 onward.
     """
 
+    # How far back the provider walks from a breakpoint looking for an entry
+    # written by an earlier request.  Documented as 20 positions, counting the
+    # breakpoint itself as the first.
+    LOOKBACK_BLOCKS = 20
+
     def __init__(
         self,
         *,
@@ -134,20 +154,21 @@ class PromptCacheSimulator:
                 f"maximum is {self.max_breakpoints}"
             )
 
-        # Byte-exact rolling prefix hash and running token count.
+        # Byte-exact rolling prefix hash and running token count at EVERY block
+        # boundary — the lookback in rule 6 reads positions that are not
+        # breakpoints in this request.
         digest = hashlib.sha256()
         cumulative = 0
-        prefix_hash_at: dict[int, str] = {}
-        cumulative_at: dict[int, int] = {}
-        for i, block in enumerate(blocks):
+        prefix_hash_at: list[str] = []
+        cumulative_at: list[int] = []
+        for block in blocks:
             digest.update(block.text.encode("utf-8"))
             # Length-delimit so that ["ab", "c"] and ["a", "bc"] hash
             # differently — block boundaries are part of the prompt's identity.
             digest.update(b"\x00%d\x00" % len(block.text))
             cumulative += count_tokens(block.text)
-            if block.is_breakpoint:
-                prefix_hash_at[i] = digest.hexdigest()
-                cumulative_at[i] = cumulative
+            prefix_hash_at.append(digest.hexdigest())
+            cumulative_at.append(cumulative)
 
         total = cumulative
         session = self._session(session_id)
@@ -157,14 +178,21 @@ class PromptCacheSimulator:
             i for i in breakpoints if cumulative_at[i] >= self.min_cacheable_tokens
         ]
 
-        # Longest eligible prefix that is already cached wins.
+        # From each breakpoint, walk backward up to LOOKBACK_BLOCKS positions
+        # looking for an entry an earlier request wrote.  Take the longest hit
+        # found across all breakpoints — a shorter breakpoint can reach a
+        # position that a longer one's window missed.
         hit_index: int | None = None
-        for i in reversed(eligible):
-            entry = session.get(prefix_hash_at[i])
-            if entry is not None:
-                hit_index = i
-                entry.expires_at = now + self.ttl_seconds  # refreshed on hit
-                break
+        for bp in breakpoints:
+            floor = max(0, bp - self.LOOKBACK_BLOCKS + 1)
+            for j in range(bp, floor - 1, -1):
+                if prefix_hash_at[j] in session:
+                    if hit_index is None or j > hit_index:
+                        hit_index = j
+                    break
+
+        if hit_index is not None:
+            session[prefix_hash_at[hit_index]].expires_at = now + self.ttl_seconds
 
         cached_tokens = cumulative_at[hit_index] if hit_index is not None else 0
         last_eligible = eligible[-1] if eligible else None

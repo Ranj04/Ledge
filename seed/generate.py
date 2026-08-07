@@ -725,12 +725,22 @@ def _conversations() -> dict[str, Any]:
     }
 
 
-ORG_PREFIXES = [
-    "Northgate", "Bluebird", "Cedar", "Brightpath", "Summit", "Maple", "Harbor", "Juniper",
-    "Redwood", "Silverline", "Oakbridge", "Newleaf", "Clearview", "Riverstone", "Pinecrest",
-    "Starling", "Westfield", "Eastbrook", "Lighthouse", "Copperhill", "Willow", "Highland",
-    "Sunrise", "Evergreen", "Foxglove",
+NAIVE_COST_PER_CALL = 0.012175  # Measured by scripts/experiment.py.
+MEAN_PROMPT_TOKENS = 3466  # Measured naive mean from scripts/experiment.py.
+INPUT_SHARE = 0.78
+
+# Each three-part coined stem is unique, so alphabetic sorting cannot expose a
+# small recycled prefix list. The resulting organizations are plainly fictional.
+ORG_STEM_ONSETS = [
+    "Aeri", "Alvi", "Brin", "Cery", "Dova", "Elsi", "Fara", "Gali", "Havi", "Ilya",
+    "Jori", "Keli", "Lumi", "Mera", "Nori", "Orla", "Pavi", "Quen", "Runi", "Sela",
 ]
+ORG_STEM_MIDDLES = [
+    "bar", "bel", "bor", "bri", "cal", "cor", "dar", "del", "dor", "fal", "fen", "gar",
+    "hal", "kel", "lor", "mar", "nel", "pel", "rav", "sel", "tal", "val", "wen", "yor",
+    "zen",
+]
+ORG_STEM_ENDINGS = ["a", "en", "ia", "il", "in", "or", "um", "us", "yn", "et"]
 ORG_MIDDLES = [
     "Academic", "Learning", "Scholars", "Study", "Education", "Mentor", "Knowledge", "STEM",
     "College Prep", "After School", "Tutorial", "Learning Lab", "Student Success", "Exam Prep",
@@ -743,51 +753,92 @@ ORG_SUFFIXES = [
 
 
 def _fleet(rng: random.Random) -> dict[str, Any]:
-    names = [f"{a} {b} {c}" for a in ORG_PREFIXES for b in ORG_MIDDLES for c in ORG_SUFFIXES]
-    rng.shuffle(names)
+    stems = [
+        f"{onset}{middle}{ending}"
+        for onset in ORG_STEM_ONSETS
+        for middle in ORG_STEM_MIDDLES
+        for ending in ORG_STEM_ENDINGS
+    ]
+    assert len(stems) == 5_000 and len(set(stems)) == len(stems)
+    rng.shuffle(stems)
     tenants: list[dict[str, Any]] = []
     for index in range(1, 5001):
         # Log-normal size creates many small tenants and a few very large ones.
-        students = min(180_000, max(8, int(rng.lognormvariate(4.55, 1.22))))
-        if index <= 12:
-            students = 35_000 + int(rng.paretovariate(1.8) * 9_000)
+        students = min(4_000, max(8, int(rng.lognormvariate(4.55, 1.22))))
         if students < 180:
             plan = "starter"
         elif students < 2_500:
             plan = "growth"
         else:
             plan = "scale"
-        memories_per_student = rng.uniform(58.0, 126.0)
-        memories_total = int(students * memories_per_student)
-        calls_per_student = rng.uniform(18.0, 74.0)
-        calls_30d = max(students, int(students * calls_per_student))
-        avg_memories_per_call = round(min(48.0, max(8.0, rng.gauss(22.5, 6.2))), 1)
-        avg_input_tokens = 430 + avg_memories_per_call * rng.uniform(25.0, 43.0)
-        naive_cost = round(
-            calls_30d * avg_input_tokens * rng.uniform(2.3, 3.2) / 1_000_000, 2
+        memories_per_student = rng.uniform(60.0, 220.0)
+        jittered_memory_density = min(
+            220.0, max(60.0, memories_per_student * rng.uniform(0.98, 1.02))
         )
-        cache_hit_rate = round(min(0.91, max(0.18, rng.betavariate(5.2, 2.7))), 2)
-        # Synthetic billing formula: cached input receives a 70% discount.
-        tiered_cost = round(naive_cost * (1.0 - 0.70 * cache_hit_rate), 2)
-        eviction_rate = min(0.12, max(0.008, rng.betavariate(1.4, 18.0)))
-        eviction_candidates = int(memories_total * eviction_rate)
-        wasted_spend = tiered_cost * eviction_rate * rng.uniform(0.75, 1.18)
+        memories_total = max(
+            students * 60,
+            min(students * 220, round(students * jittered_memory_density)),
+        )
+        calls_per_student_per_month = rng.uniform(40.0, 400.0)
+        calls_30d = max(students * 40, int(students * calls_per_student_per_month))
+        avg_memories_per_call = round(memories_per_student * 22.5 / 156.0, 1)
+        cache_hit_rate = round(0.34 + 0.38 * rng.betavariate(5.5, 2.5), 4)
+
+        # More memories make a larger prompt, so cost scales from the measured
+        # 3,466-token, $0.012175-per-call demo baseline instead of being redrawn.
+        prompt_scale = memories_per_student / 156.0
+        naive_per_call = NAIVE_COST_PER_CALL * (0.55 + 0.45 * prompt_scale)
+        naive_cost_30d = naive_per_call * calls_30d
+
+        # Cached input bills at 0.1x while uncached input and output bill at 1x.
+        # Input is 78% of cost at the measured prompt size, so cache hit rate
+        # alone determines the tiered multiplier.
+        tiered_cost_30d = naive_cost_30d * (1.0 - INPUT_SHARE * cache_hit_rate * 0.9)
+
+        # Evictable memory cost follows the same input share as the prompt and
+        # the exact fraction used to derive the candidate count.
+        evictable_fraction = rng.uniform(0.04, 0.14)
+        eviction_candidates = int(memories_total * evictable_fraction)
+        wasted_spend_30d = naive_cost_30d * evictable_fraction * INPUT_SHARE
         tenants.append(
             {
                 "tenant_id": f"tnt_{index:06d}",
-                "name": names[index - 1],
+                "name": f"{stems[index - 1]} {rng.choice(ORG_MIDDLES)} {rng.choice(ORG_SUFFIXES)}",
                 "plan": plan,
                 "students": students,
                 "memories_total": memories_total,
                 "calls_30d": calls_30d,
                 "avg_memories_per_call": avg_memories_per_call,
-                "naive_cost_30d_usd": naive_cost,
-                "tiered_cost_30d_usd": tiered_cost,
+                "naive_cost_30d_usd": round(naive_cost_30d, 2),
+                "tiered_cost_30d_usd": round(tiered_cost_30d, 2),
                 "cache_hit_rate": cache_hit_rate,
                 "eviction_candidates": eviction_candidates,
-                "wasted_spend_30d_usd": round(wasted_spend, 2),
+                "wasted_spend_30d_usd": round(wasted_spend_30d, 2),
             }
         )
+
+    total_naive = sum(tenant["naive_cost_30d_usd"] for tenant in tenants)
+    total_tiered = sum(tenant["tiered_cost_30d_usd"] for tenant in tenants)
+    fleet_reduction = (total_naive - total_tiered) / total_naive
+    assert 0.42 <= fleet_reduction <= 0.44, fleet_reduction
+    per_tenant = [
+        (tenant["naive_cost_30d_usd"] - tenant["tiered_cost_30d_usd"])
+        / tenant["naive_cost_30d_usd"]
+        for tenant in tenants
+    ]
+    assert max(per_tenant) <= 0.51 and min(per_tenant) >= 0.23
+    implied_per_call = []
+    for tenant in tenants:
+        implied = tenant["naive_cost_30d_usd"] / tenant["calls_30d"]
+        assert 0.006 <= implied <= 0.030, (tenant["tenant_id"], implied)
+        implied_per_call.append(implied)
+
+    print(f"Fleet-wide cost reduction: {fleet_reduction:.2%}")
+    print(f"Per-tenant reduction range: {min(per_tenant):.2%}–{max(per_tenant):.2%}")
+    print(
+        "Implied naive cost-per-call range: "
+        f"${min(implied_per_call):.6f}–${max(implied_per_call):.6f}"
+    )
     return {
         "note": "SYNTHETIC SEED DATA — labelled as such in the UI",
         "generated_at": GENERATED_AT,

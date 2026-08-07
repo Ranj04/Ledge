@@ -52,12 +52,12 @@ Give the dashboard something to show:
 
 ```
   mode           mean     median     stdev        min        max    hit rate
-  naive    $ 0.085226 $ 0.086010 $0.001274 $ 0.083466 $ 0.086202       0.0%
-  tiered   $ 0.053955 $ 0.054342 $0.001137 $ 0.052440 $ 0.055083      56.3%
+  naive    $ 0.085226 $ 0.086010 $0.001283 $ 0.083466 $ 0.086202       0.0%
+  tiered   $ 0.045592 $ 0.046303 $0.001088 $ 0.044097 $ 0.046377      64.3%
 
-  reduction   mean 36.7%   median 37.0%   range 36.0%–37.2%   stdev 0.54%
-  same answers in 24/24 runs
-  prompt size   naive 24,260 tok   tiered 24,379 tok   (same content, different layout)
+  reduction   mean 46.5%   median 46.3%   range 46.1%–47.2%   stdev 0.49%
+  same answers in 18/18 runs
+  prompt size   naive 24,260 tok   tiered 24,372 tok   (same content, different layout)
 ```
 
 ---
@@ -69,14 +69,19 @@ behind a `Protocol` in `app/contracts.py` with two implementations — a real cl
 — switched by one environment variable.
 
 **The simulators are not stubs.** `MockCortexClient` implements the *billing rule*: byte-exact
-prefix matching against every cached prefix in the session, a 1,024-token minimum, at most 4
+prefix hashing at every block boundary, writes only at breakpoints, **reads that walk backward up
+to 20 blocks** looking for an entry an earlier request wrote, a 1,024-token minimum, at most 4
 breakpoints, a 5-minute TTL refreshed on hit. Those are the constraints Snowflake documents for
 Cortex's Messages API, not a guess at them.
+
+We got that lookback wrong at first, and it mattered: under the wrong model the conversation-history
+breakpoint looked worthless and we nearly deleted it. Correcting the instrument is what surfaced the
+layout that produces the number above (`DECISIONS.md` D16, D17).
 
 The consequence is that our real algorithm is genuinely measured. If the Assembler tiers badly, the
 simulator reports poor cache performance exactly as Cortex would — and `tests/test_cache_sim.py`
 holds it to the rule, including the one that matters: change one character in a tier-1 memory and
-caching dies for tiers 1 through 3.
+every cached segment behind it dies with it.
 
 `cached_tokens` is always **derived** — from the API response or from the prefix computation. No
 code path assigns it.
@@ -112,8 +117,14 @@ sql/             Snowflake DDL, rollups, reconciliation
 |---|---|---|---|
 | 0 Frozen | system prompt + `procedural` | deploy-time | yes |
 | 1 Durable | `profile` | weeks–months | yes |
-| 2 Slow | `semantic` | days | yes |
+| 2 Slow | `semantic` | days — but the retrieved *subset* churns per query | no |
 | 3 Volatile | `episodic` + the new message | every turn | no |
+
+Order is by **measured prefix stability**, not tier number: `0 → 1 → conversation history → 2 → 3`.
+Conversation history is append-only, so its prefix never changes; a top-k semantic retrieval
+reshuffles every question. A churning block poisons every stable block behind it, so tier 2 rides
+*behind* the history. Three breakpoints of the four available. That one change moved the result
+from 36.9% to 46.5% — the working is in `DECISIONS.md` D17.
 
 ## Tests
 

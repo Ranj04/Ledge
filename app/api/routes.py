@@ -270,6 +270,18 @@ async def inspect(req: InspectRequest) -> dict[str, Any]:
     }
 
 
+def _message_label(role: str, carries: list[int]) -> str:
+    if not carries:
+        return f"{role} message"
+    names = " + ".join(TIER_NAMES[t] for t in carries)
+    span = "–".join(str(t) for t in (carries[0], carries[-1])) if len(carries) > 1 else str(
+        carries[0]
+    )
+    return f"Tiers {span} + question · {names}" if len(carries) > 1 else (
+        f"Tier {span} + question · {names}"
+    )
+
+
 def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
     blocks, cumulative, index = [], 0, 0
     for block in prompt.system_blocks:
@@ -291,6 +303,13 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
         )
         index += 1
 
+    # Which tiers ended up inside a message rather than the system block. The
+    # inspector has to name them, or the tiered column looks like it dropped
+    # context that the naive column carries.
+    message_tiers = sorted(
+        {b.tier for b in prompt.system_blocks} ^ {t for t, n in prompt.tier_tokens.items() if n}
+    )
+
     messages = []
     for msg in prompt.messages:
         content = msg["content"]
@@ -301,6 +320,8 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
             text = part.get("text", "")
             tokens = count_tokens(text)
             cumulative += tokens
+            # Only the final user turn carries memory content.
+            carries = message_tiers if msg is prompt.messages[-1] else []
             messages.append(
                 {
                     "index": index,
@@ -310,6 +331,8 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
                     "is_breakpoint": part.get("cache_control") is not None,
                     "cacheable": part.get("cache_control") is not None
                     and cumulative >= min_cacheable,
+                    "carries_tiers": carries,
+                    "label": _message_label(msg["role"], carries),
                     "preview": text[:400],
                 }
             )

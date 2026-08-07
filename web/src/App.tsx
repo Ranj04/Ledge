@@ -46,7 +46,15 @@ function formatInteger(value?: number) {
 }
 
 function formatMoney(value?: number, places = 4) {
-  return value === undefined ? '—' : `$${value.toFixed(places)}`
+  if (value === undefined) return '—'
+  if (Math.abs(value) >= 100) {
+    return value.toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0,
+    })
+  }
+  return `$${value.toFixed(places)}`
 }
 
 function formatPercent(value?: number) {
@@ -68,6 +76,9 @@ function useAnimatedNumber(value?: number, duration = 460) {
       return
     }
     const startValue = previous.current ?? 0
+    // Correctness does not depend on animation frames: background tabs show
+    // the latest value immediately even when requestAnimationFrame is paused.
+    setDisplay(value)
     const started = performance.now()
     let frame = 0
     const tick = (now: number) => {
@@ -130,7 +141,7 @@ function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => 
           type="button"
           aria-pressed={mode === 'tiered'}
           className={mode === 'tiered' ? 'active tiered' : ''}
-          title="Memories grouped by how often they change, stable first, with cache breakpoints at the tier boundaries. Same memories, same answer."
+          title="Content ordered by measured prefix stability, with cache boundaries after stable regions. Same memories, same answer."
           onClick={() => onChange('tiered')}
         >
           Tiered
@@ -361,12 +372,16 @@ function PromptBand({ item, total, isMessage = false }: { item: InspectBlock | I
   const tokens = item.tokens
   const proportion = tokens !== undefined && total ? tokens / total : 0
   const height = Math.max(58, proportion * 320)
-  const tier = isMessage ? 3 : (item as InspectBlock).tier
-  const label = isMessage ? `${(item as InspectMessage).role} message` : (item as InspectBlock).label
+  const message = isMessage ? item as InspectMessage : undefined
+  const carriedTiers = message?.carries_tiers ?? []
+  const tier = message ? carriedTiers[0] : (item as InspectBlock).tier
+  const tierClass = tier === undefined ? 'conversation-band' : `tier-${tier}`
+  const carriedClass = carriedTiers.length > 1 ? ` carries-tiers carries-tiers--${carriedTiers.join('-')}` : ''
+  const label = message ? message.label?.trim() || `${message.role} message` : (item as InspectBlock).label
 
   return (
     <>
-      <div className={`prompt-band tier-${tier}`} style={{ minHeight: `${height}px` }}>
+      <div className={`prompt-band ${tierClass}${carriedClass}`} style={{ minHeight: `${height}px` }}>
         <div className="band-heading">
           <strong>{label}</strong>
           <span>{formatInteger(tokens)} tok</span>
@@ -396,7 +411,7 @@ function InspectorColumn({ layout }: { layout: InspectMode }) {
         <p>
           {isNaive
             ? 'Memories stay in relevance order at the front. There are no reusable prefix boundaries.'
-            : 'The same memories are grouped from stable to volatile. Rules mark reusable prefixes.'}
+            : 'Volatile memories ride behind the last cache boundary, so a new question never invalidates anything in front of it.'}
         </p>
       </header>
       <div className="prompt-stack">
@@ -463,10 +478,10 @@ function EmptyPanel({ message }: { message: string }) {
   )
 }
 
-type CostSort = 'monthly_cost_usd' | 'injections' | 'tokens' | 'cache_hit_rate'
+type CostSort = 'cost_per_1k_calls_usd' | 'monthly_cost_usd' | 'injections' | 'tokens' | 'cache_hit_rate'
 
 function MemoryCostPanel({ costs, memories }: { costs: MemoryCost[]; memories: MemoryBody[] }) {
-  const [sort, setSort] = useState<CostSort>('monthly_cost_usd')
+  const [sort, setSort] = useState<CostSort>('cost_per_1k_calls_usd')
   const [descending, setDescending] = useState(true)
   const bodies = new Map(memories.map((memory) => [memory.memory_id, memory.content]))
   const rows = [...costs].sort((left, right) => {
@@ -494,7 +509,7 @@ function MemoryCostPanel({ costs, memories }: { costs: MemoryCost[]; memories: M
         <div><span className="eyebrow">LIVE LEDGER · STUDENT</span><h2>Per-memory cost</h2></div>
         <strong>{formatInteger(costs.length)} memories measured</strong>
       </header>
-      <p className="panel-caption">Projected monthly extrapolates the observed window to 30 days, with a one-hour minimum window.</p>
+      <p className="panel-caption">Projected monthly extrapolates the observed window to 30 days (window floored at one day). Over a short run this is a rough figure — sort by cost per 1,000 calls for an exact comparison.</p>
       {!rows.length ? <EmptyPanel message="No memory costs have been recorded yet. Fill the ledger with:" /> : (
         <div className="dashboard-table-wrap">
           <table className="dashboard-table memory-table">
@@ -502,14 +517,16 @@ function MemoryCostPanel({ costs, memories }: { costs: MemoryCost[]; memories: M
               <th>tier</th><th>memory</th><th><SortButton field="tokens">tokens</SortButton></th>
               <th><SortButton field="injections">injections</SortButton></th>
               <th><SortButton field="cache_hit_rate">cache hit</SortButton></th>
+              <th><SortButton field="cost_per_1k_calls_usd">cost / 1k calls</SortButton></th>
               <th><SortButton field="monthly_cost_usd">projected monthly</SortButton></th>
             </tr></thead>
             <tbody>{rows.map((row, index) => (
-              <tr key={row.memory_id} className={index === 0 && sort === 'monthly_cost_usd' && descending ? 'highest-cost' : ''}>
+              <tr key={row.memory_id} className={index === 0 && sort === 'cost_per_1k_calls_usd' && descending ? 'highest-cost' : ''}>
                 <td><span className={`table-tier tier-${row.tier}`} title={`Tier ${row.tier} ${TIER_NAMES[row.tier] ?? ''}`} />{row.tier}</td>
-                <td><div className="memory-copy"><strong>{row.memory_id}</strong>{index === 0 && sort === 'monthly_cost_usd' && descending && <em>HIGHEST COST</em>}<span>{bodies.get(row.memory_id) ?? 'Memory body unavailable.'}</span></div></td>
+                <td><div className="memory-copy"><strong>{row.memory_id}</strong>{index === 0 && sort === 'cost_per_1k_calls_usd' && descending && <em>HIGHEST UNIT COST</em>}<span>{bodies.get(row.memory_id) ?? 'Memory body unavailable.'}</span></div></td>
                 <td>{formatInteger(row.tokens)}</td><td>{formatInteger(row.injections)}</td>
                 <td><div className="table-rate"><span><i style={{ width: `${Math.max(0, Math.min(100, finite(row.cache_hit_rate) * 100))}%` }} /></span><strong>{formatPercent(finite(row.cache_hit_rate))}</strong></div></td>
+                <td className="money-cell">{formatMoney(finite(row.cost_per_1k_calls_usd))}</td>
                 <td className="money-cell">{formatMoney(finite(row.monthly_cost_usd), 2)}</td>
               </tr>
             ))}</tbody>

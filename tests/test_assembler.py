@@ -136,10 +136,66 @@ def test_naive_reshuffles_when_the_query_changes(memories):
     assert first.system_blocks[0].text != second.system_blocks[0].text
 
 
-def test_tiered_places_a_breakpoint_at_every_tier_boundary(memories):
+def test_only_the_stable_tiers_live_in_the_system_block(memories):
+    """Tiers 0 and 1 are stable enough to cache. Tier 2 is a top-k retrieval
+    that reshuffles every question, so it rides behind the conversation
+    history instead — see DECISIONS.md D17."""
     prompt = assemble(memories, user_message="q", mode="tiered", registry=reg(), now=NOW)
-    assert [b.tier for b in prompt.system_blocks] == [0, 1, 2]
+    assert [b.tier for b in prompt.system_blocks] == [0, 1]
     assert all(b.cache_control == {"type": "ephemeral"} for b in prompt.system_blocks)
+
+
+def test_tier_2_rides_behind_the_conversation_history(memories):
+    history = [{"role": "user", "content": "earlier"},
+               {"role": "assistant", "content": "reply"}]
+    prompt = assemble(memories, user_message="q", history=history, mode="tiered",
+                      registry=reg(), now=NOW)
+
+    final = prompt.messages[-1]["content"]
+    assert "balance equations in acidic solution" in final, "tier 2 is in the last turn"
+    assert all("acidic solution" not in b.text for b in prompt.system_blocks)
+
+
+def test_a_churning_tier_in_front_of_a_stable_one_poisons_it(memories):
+    """The reason for the layout, stated as a property rather than a number.
+
+    Conversation history is append-only: its prefix never changes, only grows.
+    Tier 2 changes every turn. If tier 2 sat in front of the history, the
+    history's prefix would differ every turn and could never be read back.
+    """
+    import copy
+
+    import app.assembler.assemble as module
+
+    history = [{"role": "user", "content": "earlier"},
+               {"role": "assistant", "content": "reply"}]
+
+    def history_prefix(mems, placement):
+        original = module.TIER2_PLACEMENT
+        module.TIER2_PLACEMENT = placement
+        try:
+            p = assemble(mems, user_message="q", history=history, mode="tiered",
+                         registry=reg(), now=NOW)
+            # Everything up to and including the history breakpoint.
+            text = "".join(b.text for b in p.system_blocks)
+            for msg in p.messages[:-1]:
+                c = msg["content"]
+                text += c if isinstance(c, str) else "".join(x["text"] for x in c)
+            return text
+        finally:
+            module.TIER2_PLACEMENT = original
+
+    churned = copy.deepcopy(memories)
+    for m in churned:
+        if m.memory_type == "semantic":
+            m.content += " (revised)"
+
+    assert history_prefix(memories, "message") == history_prefix(churned, "message"), (
+        "with tier 2 behind the history, a tier-2 change leaves the history prefix intact"
+    )
+    assert history_prefix(memories, "system") != history_prefix(churned, "system"), (
+        "with tier 2 in front, the same change destroys the history prefix"
+    )
 
 
 def test_naive_places_no_breakpoints(memories):
@@ -148,14 +204,16 @@ def test_naive_places_no_breakpoints(memories):
     assert all(b.cache_control is None for b in prompt.system_blocks)
 
 
-def test_conversation_history_earns_the_fourth_breakpoint(memories):
+def test_conversation_history_earns_a_breakpoint(memories):
     history = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
     ]
     prompt = assemble(memories, user_message="q", history=history, mode="tiered",
                       registry=reg(), now=NOW)
-    assert prompt.breakpoint_count == 4
+    # Tiers 0 and 1, plus the history. Three of the four available — we leave
+    # one unused rather than spend it on a tier that churns.
+    assert prompt.breakpoint_count == 3
     last_history = prompt.messages[-2]
     assert last_history["content"][0]["cache_control"] == {"type": "ephemeral"}
 
@@ -187,11 +245,15 @@ def test_volatile_tier_keeps_relevance_ordering(memories):
     assert episodic == ["mem_e1", "mem_e2"]  # 0.70 before 0.10
 
 
-def test_tier_cumulative_tokens_are_monotonic(memories):
+def test_only_cacheable_tiers_claim_a_cached_prefix(memories):
     prompt = assemble(memories, user_message="q", mode="tiered", registry=reg(), now=NOW)
     cum = prompt.tier_cumulative_tokens
-    assert cum[0] < cum[1] < cum[2]
-    assert 3 not in cum, "tier 3 is never cached and must not claim a cached prefix"
+    assert cum[0] < cum[1]
+    # Tiers 2 and 3 sit behind the last breakpoint, so no value of
+    # `cached_tokens` may ever report them as cached.
+    assert 2 not in cum and 3 not in cum
+    assert not prompt.tier_was_cached(2, 999_999)
+    assert not prompt.tier_was_cached(3, 999_999)
 
 
 def test_naive_reports_no_tier_as_cached(memories):

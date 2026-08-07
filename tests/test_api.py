@@ -213,7 +213,7 @@ def test_inspect_returns_both_layouts_over_the_same_memories(client):
     naive, tiered = body["modes"]["naive"], body["modes"]["tiered"]
     assert naive["memory_tokens"] == tiered["memory_tokens"], "same content, different layout"
     assert naive["breakpoint_count"] == 0
-    assert tiered["breakpoint_count"] >= 3
+    assert tiered["breakpoint_count"] >= 2
 
 
 def test_inspect_marks_which_boundaries_actually_cache(client):
@@ -222,13 +222,22 @@ def test_inspect_marks_which_boundaries_actually_cache(client):
         json={"user_id": USER, "message": "limiting reagents", "session_id": "i2"},
     ).json()
 
-    blocks = body["modes"]["tiered"]["blocks"]
-    assert [b["tier"] for b in blocks] == [0, 1, 2]
+    tiered = body["modes"]["tiered"]
+    blocks = tiered["blocks"]
+    assert [b["tier"] for b in blocks] == [0, 1]
     assert all(b["is_breakpoint"] for b in blocks)
     assert all(b["cacheable"] for b in blocks), (
-        "seed data is sized so every tier clears the 1,024-token minimum"
+        "seed data is sized so both system tiers clear the 1,024-token minimum"
     )
     assert blocks[0]["cumulative_tokens"] < blocks[1]["cumulative_tokens"]
+
+    # The inspector must still show where the last breakpoint falls, because
+    # everything behind it bills at full rate and that is the thing to see.
+    breakpointed = [m for m in tiered["messages"] if m["is_breakpoint"]]
+    assert len(breakpointed) <= 1
+    assert tiered["messages"][-1]["is_breakpoint"] is False, (
+        "the final user turn carries tiers 2 and 3 and is never cached"
+    )
 
 
 def test_inspect_does_not_disturb_the_live_session(client):
