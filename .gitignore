@@ -8,7 +8,7 @@ node_modules/
 web/dist/
 web/node_modules/
 data/*.db
-data/*.db-journal
+data/*.db-*
 data/*.sqlite
 .sol/logs/
 .DS_Store

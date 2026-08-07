@@ -488,6 +488,12 @@ function MemoryCostPanel({ costs, memories }: { costs: MemoryCost[]; memories: M
     const delta = finite(left[sort]) - finite(right[sort])
     return descending ? -delta : delta
   })
+  const sortSummary = sort === 'cost_per_1k_calls_usd' && descending
+    ? 'highest unit cost first'
+    : `${descending ? 'highest' : 'lowest'} ${({
+        monthly_cost_usd: 'projected monthly cost', injections: 'injection count', tokens: 'token count',
+        cache_hit_rate: 'cache hit rate', cost_per_1k_calls_usd: 'unit cost',
+      } satisfies Record<CostSort, string>)[sort]} first`
 
   function changeSort(key: CostSort) {
     if (sort === key) setDescending((current) => !current)
@@ -512,7 +518,7 @@ function MemoryCostPanel({ costs, memories }: { costs: MemoryCost[]; memories: M
       <p className="panel-caption">Projected monthly extrapolates the observed window to 30 days (window floored at one day). Over a short run this is a rough figure — sort by cost per 1,000 calls for an exact comparison.</p>
       {!rows.length ? <EmptyPanel message="No memory costs have been recorded yet. Fill the ledger with:" /> : (
         <>
-          <p className="table-summary">Showing all {formatInteger(rows.length)} memories, highest unit cost first. Scroll inside the table.</p>
+          <p className="table-summary">Showing all {formatInteger(rows.length)} memories, {sortSummary}. Scroll inside the table.</p>
           <div className="dashboard-table-wrap bounded-table-wrap">
             <table className="dashboard-table memory-table">
               <thead><tr>

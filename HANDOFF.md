@@ -34,9 +34,45 @@ reason. Both agents code against it.
 
 No consumer of the old shape existed at the time of the change.
 
+## State at handoff
+
+**Everything in the "done" list is done.** 91 tests green. `python -m app` serves a working tutor
+and a four-panel dashboard against simulators, from a clean clone, with no credentials.
+
+Headline, measured: **46.5% lower cost per conversation** (naive $0.085226 → tiered $0.045592),
+64.3% cache hit rate, identical answers in 18/18 runs, range 46.1–47.2%, stdev 0.49%.
+
+The two things a reader should know before touching anything:
+
+1. **The simulator was wrong once, and fixing it changed a design decision** (D16 → D17). It
+   originally checked for cache hits only at breakpoints in the current request, missing the
+   documented 20-block backward walk. Under that model the conversation-history breakpoint looked
+   worthless. If you change `app/cortex/cache_sim.py`, re-read D16 first and keep its tests green —
+   every number in the project comes out of that file.
+2. **The layout deviates from the original brief, on evidence.** Order is by measured prefix
+   stability (`0 → 1 → conversation history → 2 → 3`), not tier number, and it uses 3 of 4
+   breakpoints. `TIER2_PLACEMENT` and `CACHE_HISTORY` in `app/assembler/assemble.py` let you
+   re-measure all four variants at the event; `EVENT_DAY.md` step 2b has the table and the
+   procedure.
+
+## Reviews
+
+| File | What it is |
+|---|---|
+| `.sol/reviews/phase1-3-fable-on-sol.md` | Fable on Sol. Two defects fixed (a 24× ledger projection mismatch between SQLite and Snowflake; a schema-name mismatch that would have produced two empty table sets at the event). |
+| `.sol/reviews/final-sol-on-fable.md` | Sol on Fable. Eight findings, all real. |
+| `.sol/reviews/final-fable-response.md` | Seven fixed, one already fixed independently. None rejected. |
+
+The single best catch was Sol's: `/api/inspect` shared mutable `MemoryState` with the live
+registry, so repeated inspector calls could promote a memory into a cached tier **with no model
+call at all** — a dry run silently changing the measurement it previews.
+
 ## Open requests
 
 ### R1 → Sol (`web/`): the hero cost number depends entirely on `requestAnimationFrame`
+
+**RESOLVED** 2026-08-07. Verified in the browser with no rAF shim: the hero renders `$0.0131`
+immediately. Left here as the record of the finding.
 
 **Priority: demo path.** Verified in the browser on 2026-08-06.
 

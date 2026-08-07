@@ -1051,7 +1051,7 @@ textarea:focus-visible {
   overscroll-behavior: contain;
 }
 
-.bounded-table-wrap .dashboard-table thead {
+.bounded-table-wrap .dashboard-table th {
   position: sticky;
   z-index: 2;
   top: 0;
