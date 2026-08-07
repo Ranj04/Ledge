@@ -10,6 +10,7 @@ import {
   inspectPrompt,
   streamChat,
 } from './api'
+import { SalesView } from './SalesView'
 import type {
   AblationResponse,
   CacheTierRow,
@@ -683,7 +684,7 @@ function Dashboard({ userId, status }: { userId?: string; status?: Status }) {
 }
 
 export default function App() {
-  const [view, setView] = useState<'tutor' | 'dashboard'>('tutor')
+  const [view, setView] = useState<'tutor' | 'dashboard' | 'sales'>('tutor')
   const [status, setStatus] = useState<Status>()
   const [statusError, setStatusError] = useState<string>()
   const [students, setStudents] = useState<Student[]>([])
@@ -815,6 +816,9 @@ export default function App() {
           <button type="button" className={view === 'dashboard' ? 'active' : ''} onClick={() => setView('dashboard')}>
             Dashboard
           </button>
+          <button type="button" className={view === 'sales' ? 'active' : ''} onClick={() => setView('sales')}>
+            Sales
+          </button>
         </nav>
 
         <div className="header-spacer" />
@@ -848,7 +852,9 @@ export default function App() {
         </div>
       )}
 
-      {view === 'dashboard' ? (
+      {view === 'sales' ? (
+        <SalesView />
+      ) : view === 'dashboard' ? (
         <Dashboard userId={selectedStudent?.user_id} status={status} />
       ) : (
         <main className="tutor-workspace">
