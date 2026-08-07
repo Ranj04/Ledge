@@ -469,11 +469,11 @@ function PromptInspector({
 
 const FILL_COMMAND = '.venv/bin/python scripts/experiment.py --runs 4 --record'
 
-function EmptyPanel({ message }: { message: string }) {
+function EmptyPanel({ message, command = FILL_COMMAND }: { message: string; command?: string }) {
   return (
     <div className="dashboard-empty">
       <p>{message}</p>
-      <code>{FILL_COMMAND}</code>
+      <code>{command}</code>
     </div>
   )
 }
@@ -511,27 +511,30 @@ function MemoryCostPanel({ costs, memories }: { costs: MemoryCost[]; memories: M
       </header>
       <p className="panel-caption">Projected monthly extrapolates the observed window to 30 days (window floored at one day). Over a short run this is a rough figure — sort by cost per 1,000 calls for an exact comparison.</p>
       {!rows.length ? <EmptyPanel message="No memory costs have been recorded yet. Fill the ledger with:" /> : (
-        <div className="dashboard-table-wrap">
-          <table className="dashboard-table memory-table">
-            <thead><tr>
-              <th>tier</th><th>memory</th><th><SortButton field="tokens">tokens</SortButton></th>
-              <th><SortButton field="injections">injections</SortButton></th>
-              <th><SortButton field="cache_hit_rate">cache hit</SortButton></th>
-              <th><SortButton field="cost_per_1k_calls_usd">cost / 1k calls</SortButton></th>
-              <th><SortButton field="monthly_cost_usd">projected monthly</SortButton></th>
-            </tr></thead>
-            <tbody>{rows.map((row, index) => (
-              <tr key={row.memory_id} className={index === 0 && sort === 'cost_per_1k_calls_usd' && descending ? 'highest-cost' : ''}>
-                <td><span className={`table-tier tier-${row.tier}`} title={`Tier ${row.tier} ${TIER_NAMES[row.tier] ?? ''}`} />{row.tier}</td>
-                <td><div className="memory-copy"><strong>{row.memory_id}</strong>{index === 0 && sort === 'cost_per_1k_calls_usd' && descending && <em>HIGHEST UNIT COST</em>}<span>{bodies.get(row.memory_id) ?? 'Memory body unavailable.'}</span></div></td>
-                <td>{formatInteger(row.tokens)}</td><td>{formatInteger(row.injections)}</td>
-                <td><div className="table-rate"><span><i style={{ width: `${Math.max(0, Math.min(100, finite(row.cache_hit_rate) * 100))}%` }} /></span><strong>{formatPercent(finite(row.cache_hit_rate))}</strong></div></td>
-                <td className="money-cell">{formatMoney(finite(row.cost_per_1k_calls_usd))}</td>
-                <td className="money-cell">{formatMoney(finite(row.monthly_cost_usd), 2)}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
+        <>
+          <p className="table-summary">Showing all {formatInteger(rows.length)} memories, highest unit cost first. Scroll inside the table.</p>
+          <div className="dashboard-table-wrap bounded-table-wrap">
+            <table className="dashboard-table memory-table">
+              <thead><tr>
+                <th>tier</th><th>memory</th><th><SortButton field="tokens">tokens</SortButton></th>
+                <th><SortButton field="injections">injections</SortButton></th>
+                <th><SortButton field="cache_hit_rate">cache hit</SortButton></th>
+                <th><SortButton field="cost_per_1k_calls_usd">cost / 1k calls</SortButton></th>
+                <th><SortButton field="monthly_cost_usd">projected monthly</SortButton></th>
+              </tr></thead>
+              <tbody>{rows.map((row, index) => (
+                <tr key={row.memory_id} className={index === 0 && sort === 'cost_per_1k_calls_usd' && descending ? 'highest-cost' : ''}>
+                  <td><span className={`table-tier tier-${row.tier}`} title={`Tier ${row.tier} ${TIER_NAMES[row.tier] ?? ''}`} />{row.tier}</td>
+                  <td><div className="memory-copy"><strong>{row.memory_id}</strong>{index === 0 && sort === 'cost_per_1k_calls_usd' && descending && <em>HIGHEST UNIT COST</em>}<span>{bodies.get(row.memory_id) ?? 'Memory body unavailable.'}</span></div></td>
+                  <td>{formatInteger(row.tokens)}</td><td>{formatInteger(row.injections)}</td>
+                  <td><div className="table-rate"><span><i style={{ width: `${Math.max(0, Math.min(100, finite(row.cache_hit_rate) * 100))}%` }} /></span><strong>{formatPercent(finite(row.cache_hit_rate))}</strong></div></td>
+                  <td className="money-cell">{formatMoney(finite(row.cost_per_1k_calls_usd))}</td>
+                  <td className="money-cell">{formatMoney(finite(row.monthly_cost_usd), 2)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </>
       )}
     </section>
   )
@@ -577,9 +580,9 @@ function AblationPanel({ data }: { data?: AblationResponse }) {
   const waste = rows.filter((row) => row.verdict === 'evict').reduce((sum, row) => sum + finite(row.monthly_cost_usd), 0)
   return (
     <section className="dashboard-panel ablation-panel">
-      <header className="panel-heading"><div><span className="eyebrow">MEASURED INFLUENCE</span><h2>{formatMoney(waste, 2)}/month in memories that change no answer.</h2></div></header>
+      <header className="panel-heading"><div><span className="eyebrow">MEASURED INFLUENCE</span><h2>{rows.length ? `${formatMoney(waste, 2)}/month in memories that change no answer.` : 'Memory influence'}</h2></div></header>
       {data?.provenance === 'simulated' && <div className="simulator-banner">Verdicts scored against the simulator. The harness is real; run it against Cortex for verdicts about a real model.</div>}
-      {!rows.length ? <EmptyPanel message="The ablation harness has not been run. Populate the ledger, then run: .venv/bin/python -m ablation.run --sample 25. Start with:" /> : (
+      {!rows.length ? <EmptyPanel message="The ablation harness has not been run for this ledger." command=".venv/bin/python -m ablation.run --sample 25" /> : (
         <div className="ablation-list">{rows.map((row) => (
           <details key={row.ablation_id} className={`ablation-row verdict-${row.verdict}`}>
             <summary><span className="verdict-pill">{row.verdict}</span><strong>{row.memory_id}</strong><span>{formatInteger(row.tokens_saved)} tok</span><span>similarity {row.similarity == null ? '—' : row.similarity.toFixed(4)}</span><b>{formatMoney(finite(row.monthly_cost_usd), 2)}/mo</b></summary>
@@ -607,7 +610,7 @@ function FleetPanel({ data }: { data?: FleetResponse }) {
       {!tenants.length ? <EmptyPanel message="No fleet seed data is available. Populate the demo data with:" /> : <>
         <div className="fleet-tiles"><div><span>Total tenants</span><strong>{formatInteger(tenants.length)}</strong></div><div><span>30-day naive spend</span><strong>{formatMoney(totals.naive, 0)}</strong></div><div><span>30-day tiered spend</span><strong>{formatMoney(totals.tiered, 0)}</strong></div><div><span>30-day wasted spend</span><strong>{formatMoney(totals.waste, 0)}</strong></div></div>
         <p className="panel-caption">Showing the top {ranked.length} of {tenants.length.toLocaleString('en-US')} seeded tenants by estimated wasted spend.</p>
-        <div className="dashboard-table-wrap"><table className="dashboard-table"><thead><tr><th>tenant</th><th>plan</th><th>students</th><th>memories</th><th>cache hit</th><th>eviction candidates</th><th>wasted / 30d</th></tr></thead><tbody>{ranked.map((tenant) => <tr key={tenant.tenant_id}><td><strong>{tenant.name}</strong><small>{tenant.tenant_id}</small></td><td>{tenant.plan}</td><td>{formatInteger(tenant.students)}</td><td>{formatInteger(tenant.memories_total)}</td><td>{formatPercent(finite(tenant.cache_hit_rate))}</td><td>{formatInteger(tenant.eviction_candidates)}</td><td className="money-cell">{formatMoney(finite(tenant.wasted_spend_30d_usd), 0)}</td></tr>)}</tbody></table></div>
+        <div className="dashboard-table-wrap bounded-table-wrap"><table className="dashboard-table"><thead><tr><th>tenant</th><th>plan</th><th>students</th><th>memories</th><th>cache hit</th><th>eviction candidates</th><th>wasted / 30d</th></tr></thead><tbody>{ranked.map((tenant) => <tr key={tenant.tenant_id}><td><strong>{tenant.name}</strong><small>{tenant.tenant_id}</small></td><td>{tenant.plan}</td><td>{formatInteger(tenant.students)}</td><td>{formatInteger(tenant.memories_total)}</td><td>{formatPercent(finite(tenant.cache_hit_rate))}</td><td>{formatInteger(tenant.eviction_candidates)}</td><td className="money-cell">{formatMoney(finite(tenant.wasted_spend_30d_usd), 0)}</td></tr>)}</tbody></table></div>
       </>}
     </section>
   )

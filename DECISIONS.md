@@ -193,6 +193,11 @@ Six-turn scripted conversation, demo student, simulators, identical memory sets:
 **35.0% lower cost for the same conversation.** Every figure derived from the prefix computation in
 `app/cortex/cache_sim.py`; none assigned.
 
+> **Superseded — do not quote this table.** The simulator was wrong about cache lookup at this
+> point (D16) and the layout had not been measured (D17). The current figure is **46.5%**; see
+> "Measured result after Phase 4" at the end of this file. Kept here because the record of what we
+> believed and when is worth more than a tidy document.
+
 ---
 
 ## Phase 4 — Correcting the instrument, and what it changed

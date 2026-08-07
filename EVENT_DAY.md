@@ -18,11 +18,17 @@ cd /Users/ranjivj/mem
 .venv/bin/python -m pytest -q
 cd web && npm install && npm run build && cd ..
 .venv/bin/python scripts/experiment.py --runs 4 --record
+.venv/bin/python -m ablation.run --sample 20
 .venv/bin/python -m app
 ```
 
-**Expect:** all tests pass; the experiment prints ~36–37% reduction with identical answers;
-<http://localhost:8000> serves a working tutor.
+**Expect:** all tests pass; the experiment prints ~46% reduction with identical answers; the
+ablation table flags `mem_ef6be89e` `evict` and `mem_89dad914` `keep`; <http://localhost:8000>
+serves a working tutor and a dashboard with all four panels populated.
+
+**The order matters.** `--record` fills the ledger; `ablation.run` reads that ledger to price each
+memory and writes the eviction candidates. Run the ablation without recording first and the
+eviction panel reads `$0.00`, which looks like a finding rather than missing data.
 
 If this fails, stop and fix it. There is no point wiring credentials into a broken build.
 

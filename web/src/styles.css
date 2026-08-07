@@ -1045,6 +1045,29 @@ textarea:focus-visible {
   overflow-x: auto;
 }
 
+.bounded-table-wrap {
+  max-height: 60vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.bounded-table-wrap .dashboard-table thead {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  background: var(--panel-soft);
+  box-shadow: 0 1px var(--line-strong);
+}
+
+.table-summary {
+  margin: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .dashboard-table {
   width: 100%;
   border-collapse: collapse;
@@ -1293,6 +1316,9 @@ textarea:focus-visible {
 
 .ablation-list {
   display: grid;
+  max-height: 35vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .ablation-row {
