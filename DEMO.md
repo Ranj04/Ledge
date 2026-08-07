@@ -134,6 +134,15 @@ live ones.** Say the real number, whatever it is.
 > were scored against [the simulator / real Cortex]."* The UI shows the provider state on screen at
 > all times.
 
+**"You're flagging 60% of memories as evictable — really?"** ← *they will ask this*
+> No, and I wouldn't claim it. Against the simulator most memories score exactly 1.0000 — a
+> byte-identical answer — because the simulator only consults the top few relevant memories, so
+> everything else is invisible to it by construction. That's a fact about our stand-in, not about
+> memory. What I'll defend is the pair we planted: it flags the $33-a-month settings log and it
+> does *not* flag the exam date. That's the harness working in both directions. Run it against
+> real Cortex and the rate drops — that's the first thing we did this morning. [Then give the real
+> number if you have it.]
+
 **"Does reordering hurt answer quality?"**
 > The same content reaches the model either way. In our runs the answers are byte-identical. We'd
 > want a proper eval before claiming that at scale, and we'd run it before shipping — the honest

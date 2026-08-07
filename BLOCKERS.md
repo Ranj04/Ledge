@@ -73,6 +73,31 @@ that it is not a function that returns "evict" for everything or "keep" for ever
 *What it does not prove:* that any specific memory is genuinely disposable for a real model. A
 lexical composer and Claude do not agree on what is relevant.
 
+### The symptom to be ready for: a 60% eviction rate
+
+Measured on 2026-08-06, sampling 25 memories: **15 came back `evict`.** Both planted memories
+landed correctly — junk at 1.0000 similarity, critical at 0.6671 — so the harness separates the
+cases it was built to separate. But 60% is not a credible claim about a real memory system, and
+nobody should present it as one.
+
+*Why it happens:* the simulator's composer references only the top three lexically-relevant
+memories per answer. Anything outside that set cannot influence the reply, so ablating it produces
+a similarity of exactly 1.0000. The verdict is a true statement about the simulator and a
+misleading one about memory in general.
+
+*Notice the tell:* the `evict` scores are almost all exactly `1.0000` — byte-identical answers.
+Real ablation produces a spread. A column of perfect ones is the signature of a model that never
+looked at the memory, not of a memory that does not matter.
+
+*How to present it:* lead with the two planted memories, which is the claim we can actually
+defend — *"the harness finds the memory that costs the most and changes nothing, and it does not
+flag the one that matters."* If asked about the overall rate, say plainly that the simulator's
+relevance model is coarse, that the real number will be lower, and that this is precisely why the
+panel is labelled as scored against the simulator.
+
+*To resolve:* `CORTEX_PROVIDER=real .venv/bin/python -m ablation.run --sample 25`. Expect the rate
+to fall substantially. Whatever it becomes is the number to quote.
+
 *On stage, say the true thing:* "the harness is real and the verdicts are computed; tonight it is
 scored against the simulator, and it runs against Cortex from this morning."
 
