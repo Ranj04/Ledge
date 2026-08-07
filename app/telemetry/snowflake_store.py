@@ -1,23 +1,26 @@
 """Snowflake ledger.
 
-Written tonight, unexercised until the event. Same interface and same column
-names as `SqliteLedgerStore`, so flipping `LEDGER_PROVIDER=snowflake` changes
-where rows land and nothing else.
+**Exercised live on 2026-08-07** against `MEMORYLEDGER.LEDGER`: DDL applied, rows
+landing, rollup views reading them. Same interface and same column names as
+`SqliteLedgerStore`, so flipping `LEDGER_PROVIDER=snowflake` changes where rows
+land and nothing else.
 
 The connector is synchronous, so every call runs in a thread. That is fine
 because telemetry is already off the request path — `record_call` is invoked
 from a FastAPI background task, never inline.
 
-# VERIFY-AT-EVENT: run `sql/01_ddl.sql` before starting the service with
-# LEDGER_PROVIDER=snowflake. `init_schema` here executes the same DDL so the
-# service is self-sufficient, but running the file first makes failures visible
-# in Snowsight rather than in a log line.
+Run `sql/01_ddl.sql` before starting the service with LEDGER_PROVIDER=snowflake.
+`init_schema` here executes the same DDL so the service is self-sufficient, but
+running the file first makes failures visible in Snowsight rather than in a log
+line.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
@@ -52,6 +55,33 @@ DDL = [
 class SnowflakeLedgerStore:
     def __init__(self) -> None:
         self.settings = get_settings()
+        self._conn = None
+        # Telemetry runs in background tasks, so two writes can land at once.
+        # The lock serialises them onto the one connection; this is off the
+        # request path, so waiting costs nobody anything.
+        self._lock = threading.Lock()
+
+    @contextmanager
+    def _session(self):
+        """The shared connection, opened once and kept.
+
+        Every query used to open its own connection and close it again on the
+        way out of a `with` block. Correct, and unusably slow: a Snowflake
+        connect is seconds of round trips, so `--record` paid that per call and
+        a 420-call sweep took over an hour with the API itself idle most of it.
+
+        Reconnects if the connection has been closed under us.
+        """
+        with self._lock:
+            if self._conn is None or self._conn.is_closed():
+                self._conn = self._connect()
+            yield self._conn
+
+    def close(self) -> None:
+        with self._lock:
+            if self._conn is not None and not self._conn.is_closed():
+                self._conn.close()
+            self._conn = None
 
     def _connect(self, *, bootstrap: bool = False):
         """Open a connection.
@@ -68,6 +98,13 @@ class SnowflakeLedgerStore:
         kwargs: dict[str, Any] = {
             "account": s.snowflake_account,
             "user": s.snowflake_user,
+            # Bounded so a connection that has died quietly fails instead of
+            # hanging. The shared connection is long-lived and the dashboard
+            # reads through it; without these, one stale socket is a permanently
+            # spinning panel on stage rather than a visible error.
+            "login_timeout": 30,
+            "network_timeout": 30,
+            "socket_timeout": 30,
         }
         if not bootstrap:
             kwargs["database"] = s.snowflake_database
@@ -77,22 +114,26 @@ class SnowflakeLedgerStore:
         if s.snowflake_role:
             kwargs["role"] = s.snowflake_role
 
-        if s.snowflake_password:
-            kwargs["password"] = s.snowflake_password
-        elif s.snowflake_pat:
-            # VERIFY-AT-EVENT: a PAT authenticates to the SQL API as a password
-            # with no special authenticator on current connector versions. If
-            # this rejects, try authenticator="programmatic_access_token", and
-            # failing that fall back to LEDGER_PROVIDER=sqlite — the ledger is
-            # not on the demo's critical path.
+        # PAT first, password second. Verified 2026-08-07: a PAT authenticates to
+        # the SQL API as a password with no special authenticator, connecting as
+        # RANJIV/ACCOUNTADMIN in AWS_US_EAST_2.
+        #
+        # The order matters and used to be the other way round. A stale
+        # SNOWFLAKE_PASSWORD left in `.env` silently won over a good PAT and the
+        # only symptom was "Incorrect username or password" — an error that reads
+        # like a bad token when the token was fine. The PAT is what every runbook
+        # here provisions, so it is what gets used.
+        if s.snowflake_pat:
             kwargs["password"] = s.snowflake_pat
+        elif s.snowflake_password:
+            kwargs["password"] = s.snowflake_password
         return snowflake.connector.connect(**kwargs)
 
     async def _run(self, fn, *args):
         return await asyncio.to_thread(fn, *args)
 
     def _query(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._session() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 if cur.description is None:
@@ -122,7 +163,7 @@ class SnowflakeLedgerStore:
         self, call: CallRecord, injections: Sequence[InjectionRecord]
     ) -> None:
         def go():
-            with self._connect() as conn:
+            with self._session() as conn:
                 with conn.cursor() as cur:
                     # TIER_TOKENS is VARIANT, so the JSON goes in as a string
                     # and PARSE_JSON does the conversion server-side.
@@ -167,7 +208,7 @@ class SnowflakeLedgerStore:
         ]
 
         def go():
-            with self._connect() as conn:
+            with self._session() as conn:
                 with conn.cursor() as cur:
                     cur.executemany(
                         """MERGE INTO MEMORY_REGISTRY t
@@ -263,7 +304,7 @@ class SnowflakeLedgerStore:
 
     async def record_ablation(self, row: dict[str, Any]) -> None:
         def go():
-            with self._connect() as conn:
+            with self._session() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         """INSERT INTO ABLATION_RESULTS VALUES

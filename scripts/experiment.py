@@ -18,15 +18,18 @@ The comparison is **paired by construction**, not merely checked afterwards:
   independently-sampled answers of different lengths would make every later turn
   a different conversation, and the cost gap would partly measure sampling noise
   rather than caching.
-* Each run gets a **fresh session id**, so no run inherits another's warm cache.
+* Each run gets a **fresh session id, unique to this invocation**, so no run
+  inherits a warm cache — not from another run, and not from an earlier sweep.
   A cold start is part of the cost of a conversation and tiered pays it too.
-* Because the transcript is shared, **output tokens are identical** across the
-  two modes by construction. The whole reported difference is input-side, which
-  is the only thing caching can affect.
+* The reported reduction is **input-side**, because that is the only side
+  caching can affect. Against a real model the two modes sample independently
+  and their replies differ in length by ~15–20%; folding that into the headline
+  would report sampling noise as a caching result. Total cost is printed
+  alongside, and the output divergence with it.
 
 Every figure printed is computed from the provider's reported usage. Nothing is
 assigned. Under simulators the usage comes from the prefix computation in
-`app/cortex/cache_sim.py`; under real Cortex it comes from the API response.
+`app/cortex/cache_sim.py`; under a real provider it comes from the API response.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ import argparse
 import asyncio
 import json
 import statistics
+import uuid
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -56,6 +60,9 @@ from app.telemetry.cost import build_records
 
 CONVERSATIONS = Path("data/seed/conversations.json")
 MODES = ("naive", "tiered")
+
+# Unique per invocation, so no sweep can read a cache another sweep wrote.
+SWEEP_ID = uuid.uuid4().hex[:8]
 
 # The seeded students carry 150+ memories each. Anything close to zero means
 # the provider is pointed somewhere without our data.
@@ -130,7 +137,19 @@ async def run_pair(conversation: dict, run_index: int, *, ledger=None) -> dict[s
         mode: TierRegistry(stability_n=get_settings().promotion_stability_n) for mode in MODES
     }
     # Fresh session per run: nobody inherits a warm cache they did not pay for.
-    sessions = {mode: f"exp-{mode}-{run_index}" for mode in MODES}
+    #
+    # SWEEP_ID is what makes that true *across invocations*, and it is not
+    # decoration. The ids used to be `exp-{mode}-{run_index}`, which is
+    # deterministic — so a second run of this script reused the first one's
+    # `prompt_cache_key`, and the provider's cache is server-side with a
+    # 30-minute TTL. Naive benefits most, because its prompt is byte-identical
+    # to the previous invocation's. Measured: naive went from a true 0.0% hit
+    # rate to a contaminated 76.2% and appeared to beat tiered by 90%.
+    #
+    # Nothing errors. The run completes and prints a confident, inverted number.
+    # Under the simulator this could not happen: its cache lives in the process
+    # and dies with it.
+    sessions = {mode: f"exp-{mode}-{run_index}-{SWEEP_ID}" for mode in MODES}
     histories: dict[str, list[dict]] = {mode: [] for mode in MODES}
     results = {mode: RunResult(mode, 0.0, 0.0, 0, 0, 0, 0, 0) for mode in MODES}
 

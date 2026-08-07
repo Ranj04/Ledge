@@ -39,7 +39,10 @@ No consumer of the old shape existed at the time of the change.
 **Everything in the "done" list is done.** 91 tests green. `python -m app` serves a working tutor
 and a four-panel dashboard against simulators, from a clean clone, with no credentials.
 
-Headline, measured: **43.8% lower cost per conversation** (naive $0.091455 → tiered $0.051375),
+Headline, measured against **real OpenAI**: **42.9% lower input-side cost per conversation**,
+naive at a **0.0%** cache hit rate against tiered's ~47%. (The earlier 43.8% was the simulator
+modelling Cortex's billing rule; the two are not directly comparable — see `DECISIONS.md` D29.)
+Superseded detail follows:
 61.9% cache hit rate, identical answers in 18/18 runs, range 43.4–44.1%, stdev 0.31%.
 
 The two things a reader should know before touching anything:

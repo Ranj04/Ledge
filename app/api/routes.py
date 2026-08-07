@@ -46,9 +46,13 @@ async def status() -> dict[str, Any]:
             "cortex": s.cortex_provider,
             "everos": s.everos_provider,
             "ledger": s.ledger_provider,
-            "model": s.cortex_model,
+            # The model actually serving inference, not whichever one a unused
+            # provider is configured for. This chip is on screen for the whole
+            # demo; naming the wrong model on it is the same class of mistake as
+            # reporting a number we did not measure.
+            "model": s.active_model,
         },
-        "live": s.cortex_provider == "real",
+        "live": s.cortex_provider in ("real", "openai"),
         "pricing": {
             "input_per_mtok": round(p.input_per_mtok, 4),
             "output_per_mtok": round(p.output_per_mtok, 4),

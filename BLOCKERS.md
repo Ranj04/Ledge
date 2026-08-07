@@ -230,3 +230,46 @@ would *widen* the reported gap, not narrow it. Every reduction figure we quote i
 
 *What would resolve it:* a line-item breakdown from OpenAI's usage dashboard for the sweep window,
 compared against `CALL_LOG`. Not attempted — it is a credibility check, not a demo dependency.
+
+## 2026-08-07 — tier 1 is byte-stable but does not cache, and nobody knows why yet
+
+**Status:** open. Not a correctness problem — an unclaimed saving.
+
+The ledger shows tier 0 at an **85%** cache hit rate and tier 1 at **0%**. That should not follow
+from the layout: both blocks are assembled from always-injected memories sorted by `memory_id`, and
+a direct check confirms both are **byte-identical across turns** (tier 0: 5,772 chars every turn;
+tier 1: 5,908 chars every turn).
+
+What is observed live: `cached_tokens` comes back as exactly **2268** on turn 4 and again on turn 5
+of the same conversation. It does not grow as the conversation does, and it lands *inside* tier 1 —
+the system blocks together are roughly 2,900 tokens. Attribution then marks tier 1 uncached, which
+is the correct reading of a real number.
+
+**First hypothesis, tested and wrong.** `_assemble_tiered` rewrites the last history turn into
+list-form content to carry a breakpoint, and that wrapper moves down the transcript each turn — so
+the same message serialised two ways on consecutive calls. The OpenAI client now flattens every
+message to a plain string. `cached_tokens` did not move: still exactly 2268 on turns 2, 3, 4 and 5
+of a five-turn conversation whose prompt grew from 3,191 to 4,386 tokens. The flattening was kept
+because one representation is simpler and the inconsistency was real, but it was not the cause.
+
+**What the measurement actually says.** 2268 is the system message, whole and exact — tiers 0 and 1
+together. The cached prefix never extends past it and never grows with the conversation.
+
+**The likely cause is architectural, and it is ours.** Tier 2 and tier 3 are prepended to the final
+user turn (D17), so the message we *send* for turn N is `tier2 + tier3 + question`, while the
+message we *record in history* for turn N is the plain question. On turn N+1 the history therefore
+does not match what was on the wire for turn N, and the prefix match stops at the last byte they
+agree on — the end of the system message.
+
+That is a genuine conflict between two things that are each right on their own: keeping churny
+retrieved facts out of the conversation history, and giving an implicit prefix matcher an
+append-only transcript. Cortex never surfaced it because there a breakpoint decides what caches.
+
+**Why it is not chased before the event:** the reported reduction is measured with this behaviour
+present, so it is a **floor** — fixing it can only move the number up. The fix touches the
+Assembler's message construction, which is the product, on the afternoon of the demo.
+
+*Where to start:* make the history record the same bytes that were sent, or move tier 2/3 out of the
+user turn entirely for the implicit-cache path, then check whether `cached_tokens` grows turn on
+turn. The conversation-history breakpoint that D17 was built around is worth revisiting at the same
+time: on this provider it is not a breakpoint, it is just ordering.

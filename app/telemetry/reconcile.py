@@ -1,5 +1,13 @@
 """Reconciliation against Snowflake's own billing record.
 
+**WITHDRAWN as of 2026-08-07 — do not cite this as a credibility check.**
+
+Inference moved to OpenAI (DECISIONS.md D28), so
+`SNOWFLAKE.ACCOUNT_USAGE.CORTEX_REST_API_USAGE_HISTORY` will be empty forever on this account: it
+records Cortex REST calls and we make none. The module is left intact because it is correct for the
+Cortex path and that path is one environment variable away, but nothing calls it and no document
+should claim we reconcile against a vendor's billing record. We do not. See DECISIONS.md D33.
+
 Compares our `CALL_LOG` against `SNOWFLAKE.ACCOUNT_USAGE.CORTEX_REST_API_USAGE_HISTORY`,
 bucketed by hour.
 

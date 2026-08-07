@@ -747,3 +747,51 @@ the reply. At a small budget a turn can spend the entire allowance thinking and 
 message** — observed directly at 64 tokens. A tutor explaining implicit differentiation does not
 need it; switching it off removes a dead-reply failure mode from the demo path and keeps output
 tokens comparable across modes, which the A/B depends on.
+
+### D32 — 2026-08-07 — a reused `prompt_cache_key` silently inverted the headline
+
+`run_pair` built session ids as `exp-{mode}-{run_index}`. Deterministic, and the docstring above it
+claimed "each run gets a fresh session id, so no run inherits another's warm cache". That was true
+*within* an invocation and false *across* them: the ids repeat every time the script runs, the id is
+what `prompt_cache_key` is built from, and OpenAI's cache is server-side with a **30-minute TTL**.
+
+So a second sweep read the first sweep's cache. Naive gains most, because its prompt is
+byte-identical to the previous invocation's — nothing about a repeat run changes the memories.
+Measured within ten minutes of each other, same code, same data:
+
+| | naive hit rate | reported reduction |
+|---|---|---|
+| fresh cache keys | **0.0%** | **+42.5%** |
+| reused cache keys | 76.2% | **−89.9%** |
+
+The second run completes normally and prints a confident number with the sign flipped. There is no
+error and no warning; the only symptom is that the answer is wrong.
+
+Session ids now carry `SWEEP_ID`, a per-invocation nonce. Under the simulator this class of bug
+could not occur — its cache lives in the process and dies with it — which is exactly why it was not
+caught until the provider became real. **A cache that outlives your process is part of your test
+fixture whether you modelled it or not.**
+
+### D33 — 2026-08-07 — the vendor-billing reconciliation is withdrawn, not repointed
+
+`app/telemetry/reconcile.py` and `sql/03_reconcile.sql` compared our `CALL_LOG` against
+`SNOWFLAKE.ACCOUNT_USAGE.CORTEX_REST_API_USAGE_HISTORY`, hour by hour — the answer to "how do we
+know your numbers are real?"
+
+That view records Cortex REST calls. We now make none, so it will be empty forever and the check
+would "pass" against nothing.
+
+Two options: repoint it at OpenAI's usage data, or drop the claim. **Dropped.** Repointing means a
+second API, a different granularity, and a fresh set of unverified assumptions, for a check that was
+never on the demo path and lags 45 minutes by design. Building it in the time available would
+produce exactly the kind of unexercised code that the Cortex client already taught us to be
+sceptical of.
+
+What replaces it as the credibility answer is better anyway: `cached_tokens` is read off live
+responses, the naive/tiered comparison is paired by construction, and the two measurement bugs we
+found (D21, D32) are documented with the wrong numbers they produced. That is a stronger claim than
+agreeing with a billing view.
+
+The module is left intact and clearly marked, because it is correct for the Cortex path and that
+path is one environment variable away. **A reconciliation step that cannot run must not sit in the
+runbook looking like it can** — `EVENT_DAY.md` now lists it as withdrawn.

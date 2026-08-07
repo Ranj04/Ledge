@@ -157,17 +157,20 @@ def _messages(prompt: AssembledPrompt) -> list[dict[str, Any]]:
 
     for message in prompt.messages:
         content = message["content"]
-        if isinstance(content, str):
-            messages.append({"role": message["role"], "content": content})
-            continue
-        # The Assembler emits the final history turn as a list of Anthropic
-        # content blocks so it can carry a breakpoint.  Only the text survives.
-        messages.append(
-            {
-                "role": message["role"],
-                "content": [_part(p.get("text", "")) for p in content],
-            }
+        # Flattened to a plain string, always -- including the final history
+        # turn, which the Assembler emits as a list of content blocks so it can
+        # carry a breakpoint.
+        #
+        # This is not cosmetic.  That list-form wrapper moves down the
+        # transcript every turn: the message that is last now is an ordinary
+        # string next turn.  So the *same* message serialises two different ways
+        # on consecutive calls, and an implicit prefix matcher stops dead at the
+        # first byte that moved.  Keeping one representation is what lets the
+        # cached prefix grow with the conversation instead of stalling.
+        text = content if isinstance(content, str) else "".join(
+            p.get("text", "") for p in content
         )
+        messages.append({"role": message["role"], "content": text})
     return messages
 
 

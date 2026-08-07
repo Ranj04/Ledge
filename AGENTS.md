@@ -32,8 +32,10 @@ candidates.
 The **tutor is the demo surface, not the product.** Build it competently and plainly. It exists so
 an audience has a person to care about and so the system generates realistic memory pressure.
 
-**Sponsors:** EverOS (EverMind) is the memory layer. Snowflake Cortex runs inference and Snowflake
-tables hold the ledger.
+**Sponsors:** EverOS (EverMind) is the memory layer. **OpenAI runs inference** and Snowflake holds
+the ledger and the economics rollups. Inference was Snowflake Cortex until the trial account turned
+out to carry no Cortex entitlement on any surface (DECISIONS.md D28); the Cortex client is written,
+works, and is one environment variable away.
 
 ---
 
@@ -45,7 +47,7 @@ environment variable.
 
 The simulators are **not stubs**. `MockCortexClient` genuinely implements the prompt-caching
 billing rule: byte-exact prefix matching against the previous request for the session, a
-1,024-token minimum before anything caches, at most 4 breakpoints, and a 5-minute TTL. So if the
+1,024-token minimum before anything caches, at most 4 breakpoints, and a TTL. So if the
 Assembler's tiering is wrong, the simulator reports poor cache performance exactly as real Cortex
 would. **Numbers produced tonight are real measurements against a simulated billing rule** — never
 present them as anything else, and never hand-write a number that should have been computed.
@@ -76,7 +78,11 @@ the student's question
 Conversation history is **append-only** — its prefix never changes, it only grows — so it caches
 better than a top-k semantic retrieval that reshuffles every question. A churning block poisons
 every stable block behind it, so tier 2 rides behind the history rather than in front of it.
-Three breakpoints of the four available. Measured: 36.9% → **43.8%**. See DECISIONS.md D17.
+Three breakpoints of the four available. Measured under the simulator: 36.9% → **43.8%**.
+See DECISIONS.md D17.
+
+**Against real OpenAI: 42.9% input-side.** Caching there is implicit, so ordering alone does the
+work and explicit breakpoints measured *worse* — see DECISIONS.md D29.
 
 `naive` mode is the honest baseline — memories near the front of the prompt in relevance order, no
 breakpoints, i.e. how agents are normally built. It is production code, not a strawman. Never

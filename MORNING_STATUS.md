@@ -1,5 +1,17 @@
 # Morning status — 2026-08-07
 
+> **SUPERSEDED the same afternoon.** This is the 09:00 triage snapshot, kept as a record of what was
+> true then. Two things below are no longer accurate:
+>
+> - **Inference is OpenAI, not Snowflake Cortex.** The trial account carries no Cortex entitlement on
+>   any surface (`DECISIONS.md` D28). Snowflake holds the ledger instead, live and verified.
+> - **The headline is 42.9%, measured against a real model**, not the 43.8% the simulator reported.
+>   The two are not comparable: the simulator modelled Cortex's rule, and the layout on OpenAI wins
+>   through ordering alone rather than breakpoint placement (`DECISIONS.md` D29).
+>
+> Current state is in `EVENT_DAY.md`.
+
+
 Triage before touching code. Event is in a few hours; credentials arrive on-site.
 
 ---
@@ -43,8 +55,8 @@ did then start the API himself on 8765 — a browser instance is still unavailab
 Yes. Verified from a clean ledger this morning, not assumed:
 
 - **91 tests + 5 ablation tests green.**
-- **Experiment:** **45.5% reduction** at triage time. *(Superseded — the final measured figure
-  after the six-type seed is **43.8%**; see the bottom of this file.)*
+- **Experiment:** **45.5% reduction** at triage time. *(Superseded twice — 43.8% after the six-type seed against the
+  simulator, then **42.9%** measured against real OpenAI. See the banner at the top.)*
 - **Conversation:** streams, receipts render, hero cost moves. Turn 1 shows `-$0.0017` with the
   explanatory note; it clears once positive.
 - **Toggle:** flipped to Naive mid-conversation, per-call cost bar visibly taller. 3 receipts,

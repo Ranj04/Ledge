@@ -30,8 +30,10 @@ candidates.
 The **tutor is the demo surface, not the product.** Build it competently and plainly. It exists so
 an audience has a person to care about and so the system generates realistic memory pressure.
 
-**Sponsors:** EverOS (EverMind) is the memory layer. Snowflake Cortex runs inference and Snowflake
-tables hold the ledger.
+**Sponsors:** EverOS (EverMind) is the memory layer. **OpenAI runs inference** and Snowflake holds
+the ledger and the economics rollups. Inference was Snowflake Cortex until the trial account turned
+out to carry no Cortex entitlement on any surface (DECISIONS.md D28); the Cortex client is written,
+works, and is one environment variable away.
 
 ---
 
@@ -55,7 +57,8 @@ invented numbers:
   request wrote. That lookback is what makes a growing conversation cache — get it wrong and the
   conversation-history breakpoint looks worthless (DECISIONS.md D16).
 - Enforces the real constraints: **1,024-token minimum** before anything caches, **≤4 breakpoints**,
-  **5-minute TTL** (timestamps tracked and expired).
+  a **TTL** (timestamps tracked and expired). These model *Cortex's* rule; OpenAI's differs in the
+  TTL (30 min) and in caching implicitly, which is why the live path does not send breakpoints.
 - Derives `cached_tokens` from that computation.
 
 **Consequence: if the Assembler's tiering logic is wrong, the simulator reports poor cache
@@ -81,7 +84,7 @@ FastAPI
    ├── app/assembler/   ← THE PRODUCT
    │                    tier by volatility, order stable→volatile,
    │                    place ≤4 cache_control breakpoints
-   ├── app/cortex/      inference                   → Snowflake Cortex | simulator
+   ├── app/cortex/      inference                   → OpenAI | Cortex | simulator
    └── app/telemetry/   async, never in request path → Snowflake | SQLite
                                                              │
                              ablation/ (offline script) ──────┤
@@ -118,7 +121,11 @@ Conversation history is **append-only** — its prefix never changes, it only gr
 better than a top-k semantic retrieval that reshuffles every question. A churning block poisons
 every stable block behind it, so tier 2 rides behind the history rather than in front of it.
 Three breakpoints of the four available; the fourth would have to sit on churning content.
-Measured: 36.9% -> **43.8%** cost reduction. Full working in DECISIONS.md D17.
+Measured under the simulator: 36.9% -> **43.8%**. Full working in DECISIONS.md D17.
+
+**Against real OpenAI the figure is 42.9% input-side, and the mechanism is narrower:** caching
+there is implicit, so ordering alone does the work and explicit breakpoints measured *worse*
+(DECISIONS.md D29). The breakpoints below still matter for Cortex and for the simulator.
 
 **Tier drift:** if a tier-1 memory's content changes, the cache for tiers 1–3 invalidates on the
 next call. Promote a memory to a slower tier only after it has been content-stable for
