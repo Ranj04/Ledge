@@ -141,6 +141,13 @@ Commit.
 
 ## Phase 2 — Cortex live, and the one number that matters
 
+> **STOP — READ BLOCKERS.md FIRST.** As of 2026-08-07 this account cannot call Cortex on any
+> surface: the SQL function and the REST API both refuse on account entitlement, not region.
+> Cross-region, the network policy and the PAT are all correctly in place and verified; the
+> entitlement is not. **Do not attempt steps 6 and 7, and do not try to work around it in code.**
+> Leave `CORTEX_PROVIDER=sim`, go straight to phase 3, and let a human resolve it with the
+> Snowflake solutions team on-site. If they grant it, come back and run steps 6-7 unchanged.
+
 6. Set `CORTEX_PROVIDER=real`. Run one real turn through the tiered path.
    → **verify:** `usage.prompt_tokens_details.cached_tokens` is **> 0 on the second call** of an
    identical prefix. Print it. Do not proceed on faith.

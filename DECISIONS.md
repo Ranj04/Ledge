@@ -664,3 +664,86 @@ slide.
 The seeded students carry 150+ each, so the threshold cannot fire on a healthy run. **Refusing to
 produce a number is always better than producing a wrong one**, and a guard is worth more than a
 comment because this failure has no visible symptom.
+
+---
+
+### D28 — 2026-08-07 — OpenAI replaces Cortex for inference; Snowflake becomes the ledger
+
+The Snowflake trial account carries **no Cortex entitlement on any surface** — SQL AI functions and
+the Cortex REST API both refuse on account permissions, not on region. Nothing in code fixes that,
+so the inference dependency was swapped.
+
+**The product did not pivot.** The Assembler, the tiering, the drift logic, the ledger, the ablation
+harness, the dashboard and all 118 tests are untouched. One dependency moved.
+
+The swap was cheap because the billing rule is the same rule. Verified against OpenAI's published
+pricing on 2026-08-07, for `gpt-5.6-terra`: $2.00/Mtok input, $0.20 cached, $12.00 output, $2.50
+cache write. That is **0.1× read and 1.25× write** — the identical multipliers Anthropic and Cortex
+use, which is why `app/telemetry/` needed no change at all. Only `Pricing.input_per_mtok` and
+`output_per_mtok` moved.
+
+Both mandatory sponsors stay live: EverOS remembers, Snowflake holds the ledger and the economics
+rollups. For an event called Token Economy, "Snowflake is the economics layer" is a better fit than
+"we called an LLM through them", and the brief explicitly allows *analyze* alongside build and
+operate.
+
+`RealCortexClient` is left working and unexercised. If the entitlement is granted on-site,
+`CORTEX_PROVIDER=real` is the entire change.
+
+### D29 — 2026-08-07 — explicit breakpoints lose to implicit caching, and that sharpens the claim
+
+The plan was to translate the Assembler's `cache_control` markers into OpenAI's
+`prompt_cache_breakpoint: {"mode": "explicit"}` — a rename, not a redesign. Measured over the three
+seeded conversations against the live API, it was the wrong call:
+
+| layout | cached | input-side cost | vs naive |
+|---|---|---|---|
+| naive, implicit caching | **0.0%** | $0.171 | — |
+| tiered, implicit caching | 47.0% | $0.101 | **−41.1%** |
+| tiered, explicit breakpoints | 47.6% | $0.113 | −33.9% |
+
+Explicit mode bought 0.6 points of extra cache and paid 8–11k tokens of cache writes at 1.25× for
+it — seven points of the reduction, for nothing. The reason is structural: `prompt_cache_options.mode
+= "explicit"` *disables* the implicit breakpoint, so declaring breakpoints trades an automatic
+longest-prefix match for four manual ones. Where the stable content is already in front, there is
+nothing left for a breakpoint to win.
+
+So the client sends no breakpoints. The Assembler still emits them — they are the only thing that
+makes Cortex or the simulator cache at all — and the OpenAI client ignores them.
+
+**This makes the demo stronger, not weaker.** On Cortex the claim was "place breakpoints well". Here
+it is narrower and harder to argue with: *ordering alone*. The baseline is not denied anything —
+caching on this provider is free, automatic, and on by default — and it still measures **0.0%
+cached**, because memories retrieved per turn sit at the front of the prompt and poison every byte
+behind them. Same memories, same provider, same automatic cache, 41% apart on layout.
+
+Two silent traps found on the way, both recorded in the client:
+
+* Anthropic's `cache_control` key is **accepted and ignored** — it does not 400. A mechanical port
+  would have cached nothing and reported success.
+* A single repeated prompt is a useless test: with nothing changing between calls both layouts cache
+  ~100%. The contrast only exists over a conversation where retrieval moves. The live probe was
+  rewritten to run three turns for exactly this reason.
+
+### D30 — 2026-08-07 — the headline is input-side cost, because output is sampling noise
+
+`scripts/experiment.py` used to abort if the two modes produced different output token counts, on
+the correct reasoning that identical output means the whole reported gap is input-side, which is the
+only thing caching can touch. Against the deterministic simulator that held. Against a real model it
+cannot: the two modes sample independently and their replies differ ~20% in length.
+
+Comparing total cost would fold that noise into the headline — and on a short conversation it
+exceeded the effect being measured, producing a −84.6% reduction on one conversation and a
+meaningless 0.9% mean across three.
+
+So the reported reduction is computed on the prompt side, total cost is printed alongside it, and
+the output divergence is printed rather than hidden. Excluding a cost that caching cannot affect is
+not flattery; folding in a 20% sampling wobble would have been noise.
+
+### D31 — 2026-08-07 — `reasoning_effort="none"` on the tutor
+
+`gpt-5.6-terra` reasons by default and reasoning tokens come out of the same completion budget as
+the reply. At a small budget a turn can spend the entire allowance thinking and return an **empty
+message** — observed directly at 64 tokens. A tutor explaining implicit differentiation does not
+need it; switching it off removes a dead-reply failure mode from the demo path and keeps output
+tokens comparable across modes, which the A/B depends on.

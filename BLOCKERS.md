@@ -172,3 +172,61 @@ práctico"`. The episode summary was in English; the profile was not.
 No documented language control on `/api/v2/memory/add`. Not chased — the demo runs on seeded
 memory (`DECISIONS.md` D19), so this does not touch the demo path. It is recorded because it is a
 real property of the integration and someone will otherwise rediscover it live and be surprised.
+
+## 2026-08-07 — BLOCKING: the Snowflake trial account has no Cortex entitlement
+
+Not a region problem and not a cross-region problem. The account is not permitted to call Cortex
+on **either** surface. Verified directly, both from Snowsight and against the REST endpoint:
+
+* SQL AI function -> `AI function COMPLETE is not available for trial accounts.`
+* Cortex REST API -> `403 {"code":"003001","message":"This account is not allowed to access this
+  endpoint. Please contact Snowflake support."}`
+
+Everything else on the Snowflake side is done and verified: `CORTEX_ENABLED_CROSS_REGION='AWS_US'`
+is set, network policy `cacheguard_np` is attached to `RANJIV`, and a PAT (`CACHEGUARD`, expires
+2026-08-09T20:22Z) is in `.env`. The credential chain works. The account entitlement does not.
+
+**Do not spend time on this in code.** No client-side change, model swap, region setting, or
+warehouse change addresses an account entitlement. `CORTEX_PROVIDER` stays `sim` until it is
+resolved by one of:
+
+1. **Ask the Snowflake solutions team on-site.** The event brief promises Cortex Agents access,
+   per-attendee credits and engineering support. Enabling Cortex on account `XD29015` (org
+   `xixxamt`, locator `OC07740`, AWS us-east-2) — or being handed an account that already has it —
+   is a minutes-long task for someone with the right access. **This is the fix. Ask at the opening
+   session, not at 3pm.**
+2. Convert the trial to a paid account by adding a card. Likely unlocks it; unverified, and it
+   spends real money.
+3. Demo against the simulator and say so. Already scripted in `EVENT_DAY.md` and `DEMO.md`.
+
+If the entitlement is granted, the switch is `CORTEX_PROVIDER=real` and nothing else — the client,
+the PAT, and cross-region are all already in place.
+
+## 2026-08-07 — Cortex entitlement refused; inference moved to OpenAI
+
+**Status:** resolved by swapping the dependency. Recorded because the account limitation is real
+and someone will ask why Snowflake is not running the model.
+
+The trial account has **no Cortex entitlement on any surface** — SQL AI functions and the Cortex
+REST API both refuse on account permissions, not on region. Cross-region inference was not the
+problem and enabling it does not help. Nothing client-side fixes it.
+
+Inference is now OpenAI (`CORTEX_PROVIDER=openai`, `gpt-5.6-terra`). Snowflake holds the ledger and
+the rollups, which needs only plain SQL and no entitlement. `RealCortexClient` is left written and
+working; if the entitlement is granted on-site, `CORTEX_PROVIDER=real` is the whole change. See
+DECISIONS.md D28.
+
+## 2026-08-07 — cache *write* tokens are not observable on the OpenAI path
+
+`usage.prompt_tokens_details` reports `cached_tokens` (reads) and nothing about writes. Writes bill
+at 1.25× and are incurred on tokens *not* served from cache, so they are real money we cannot see.
+
+`OpenAIClient._read_usage` therefore reports `cache_write_tokens = 0` rather than guessing, and the
+guess would have been a billing number invented by us — precisely what the honesty rule forbids.
+
+**Direction of the error is known and favours the sceptic:** the mode with more uncached tokens
+absorbs more of the missing cost, and that is the naive baseline at 0.0% cached. Counting writes
+would *widen* the reported gap, not narrow it. Every reduction figure we quote is therefore a floor.
+
+*What would resolve it:* a line-item breakdown from OpenAI's usage dashboard for the sweep window,
+compared against `CALL_LOG`. Not attempted — it is a credibility check, not a demo dependency.

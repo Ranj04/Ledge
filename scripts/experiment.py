@@ -73,10 +73,16 @@ class RunResult:
     cache_write_tokens: int
     turns: int
     answers: list[str] = field(default_factory=list)
+    cost_output_usd: float = 0.0
 
     @property
     def cache_hit_rate(self) -> float:
         return self.cached_tokens / self.input_tokens if self.input_tokens else 0.0
+
+    @property
+    def cost_input_usd(self) -> float:
+        """Cost of the prompt side only — the only side caching can touch."""
+        return self.cost_usd - self.cost_output_usd
 
 
 def load_conversations(conversation_id: str | None) -> list[dict]:
@@ -174,6 +180,7 @@ async def run_pair(conversation: dict, run_index: int, *, ledger=None) -> dict[s
             r.output_tokens += call.output_tokens
             r.cached_tokens += call.cached_tokens
             r.cache_write_tokens += call.cache_write_tokens
+            r.cost_output_usd += call.cost_output_usd
             r.turns += 1
             r.answers.append(inference.text)
 
@@ -249,27 +256,35 @@ async def main() -> int:
             paired = await run_pair(conversation, index, ledger=ledger)
             for mode in MODES:
                 results[mode].append(paired[mode])
-                bucket[mode].append(paired[mode].cost_usd)
+                bucket[mode].append(paired[mode].cost_input_usd)
             index += 1
 
-    # Pairing is enforced by construction in run_pair, but assert the
-    # consequence anyway: identical output means the entire reported gap is
-    # input-side, which is the only thing caching can touch. If this ever
-    # fires, the number being printed is partly sampling noise.
-    for i, (naive_run, tiered_run) in enumerate(zip(results["naive"], results["tiered"])):
-        if naive_run.output_tokens != tiered_run.output_tokens:
-            sys.exit(
-                f"ABORT: run {i} produced different output token counts "
-                f"({naive_run.output_tokens} vs {tiered_run.output_tokens}). "
-                "The two runs are not the same conversation, so the cost "
-                "difference would not be attributable to caching."
-            )
+    # The headline is the **input-side** reduction.
+    #
+    # Under the simulator both modes returned byte-identical answers, so total
+    # cost was a fair comparison and this used to abort if output tokens
+    # differed. Against a real model the two modes sample independently and
+    # their replies differ in length by a few percent — noise on a dimension
+    # caching cannot touch. Comparing total cost would fold that noise into the
+    # headline, and on a short conversation it can exceed the effect being
+    # measured. So the reported reduction is computed on the prompt side, and
+    # the output divergence is printed rather than hidden.
+    output_gap = [
+        abs(n.output_tokens - t.output_tokens) / max(1, n.output_tokens)
+        for n, t in zip(results["naive"], results["tiered"])
+    ]
 
-    naive_costs = [r.cost_usd for r in results["naive"]]
-    tiered_costs = [r.cost_usd for r in results["tiered"]]
+    naive_costs = [r.cost_input_usd for r in results["naive"]]
+    tiered_costs = [r.cost_input_usd for r in results["tiered"]]
     naive_stats, tiered_stats = summarise(naive_costs), summarise(tiered_costs)
     deltas = [(n - t) / n for n, t in zip(naive_costs, tiered_costs)]
     delta_stats = summarise(deltas)
+
+    # Total cost including output, reported alongside so the dilution from a
+    # cost caching does not affect is visible rather than argued about.
+    naive_total = summarise([r.cost_usd for r in results["naive"]])
+    tiered_total = summarise([r.cost_usd for r in results["tiered"]])
+    total_reduction = (naive_total["mean"] - tiered_total["mean"]) / naive_total["mean"]
 
     identical = sum(
         1 for n, t in zip(results["naive"], results["tiered"]) if n.answers == t.answers
@@ -297,9 +312,11 @@ async def main() -> int:
         "providers": {
             "cortex": settings.cortex_provider,
             "everos": settings.everos_provider,
-            "model": settings.cortex_model,
+            "model": settings.active_model,
         },
-        "measurement": "live" if settings.cortex_provider == "real" else "simulated",
+        "measurement": (
+            "live" if settings.cortex_provider in ("real", "openai") else "simulated"
+        ),
         "conversations": [c["conversation_id"] for c in conversations],
         "turns": sum(len(c["turns"]) for c in conversations),
         "runs_per_conversation": args.runs,
@@ -313,8 +330,12 @@ async def main() -> int:
             }
             for cid, v in per_conversation.items()
         },
+        "cost_basis": "input_side",
         "cost_per_conversation_usd": {"naive": naive_stats, "tiered": tiered_stats},
         "reduction_fraction": delta_stats,
+        "total_cost_per_conversation_usd": {"naive": naive_total, "tiered": tiered_total},
+        "total_cost_reduction_fraction": total_reduction,
+        "output_token_divergence": summarise(output_gap) if output_gap else {},
         "cache_hit_rate": {
             "naive": summarise([r.cache_hit_rate for r in results["naive"]]),
             "tiered": summarise([r.cache_hit_rate for r in results["tiered"]]),
@@ -331,17 +352,21 @@ async def main() -> int:
         print(json.dumps(payload, indent=2))
         return 0
 
-    label = "LIVE — real Cortex" if settings.cortex_provider == "real" else (
+    label = {
+        "openai": "LIVE — real OpenAI",
+        "real": "LIVE — real Snowflake Cortex",
+    }.get(
+        settings.cortex_provider,
         "SIMULATED — cache accounting computed from the real billing rule, "
-        "model responses simulated"
+        "model responses simulated",
     )
     peak = max(naive_stats["mean"], tiered_stats["mean"])
 
     print()
-    print("  MemoryLedger — cost per conversation")
+    print("  MemoryLedger — input-side cost per conversation")
     print(f"  {label}")
     print(f"  {len(conversations)} conversations × {args.runs} runs = {total_runs} per mode")
-    print(f"  model {settings.cortex_model}")
+    print(f"  model {settings.active_model}")
     print()
     print(f"  {'mode':8s} {'mean':>10s} {'median':>10s} {'stdev':>9s} "
           f"{'min':>10s} {'max':>10s}   {'hit rate':>9s}")
@@ -358,18 +383,26 @@ async def main() -> int:
           f"median {delta_stats['median']:.1%}   "
           f"range {delta_stats['min']:.1%}–{delta_stats['max']:.1%}   "
           f"stdev {delta_stats['stdev']:.2%}")
-    print(f"  same answers in {identical}/{total_runs} runs")
-    billed = "BILLED" if credits_block["billed"] else "not billed — simulators"
     print(
-        f"  cortex credits  {credits_used:.3f} of ~{TRIAL_DAILY_CREDIT_CAP:.0f}/day "
-        f"({credits_block['percent_of_daily_cap']:.1f}%)   "
-        f"{swept_tokens:,} tok   [{billed}]"
+        f"  total cost  naive ${naive_total['mean']:.6f}  "
+        f"tiered ${tiered_total['mean']:.6f}  −{total_reduction:.1%}   "
+        "(input + output; output is the same work in both modes)"
     )
-    if credits_block["billed"] and credits_block["percent_of_daily_cap"] > 25:
+    print(f"  same answers in {identical}/{total_runs} runs")
+    if output_gap:
         print(
-            "  ^ that is a meaningful slice of the trial's daily Cortex allowance. "
-            "Lower --runs before rehearsing again."
+            f"  output tokens differ by {statistics.mean(output_gap):.1%} on average "
+            "between modes — independent sampling, excluded from the headline"
         )
+    if credits_block["billed"]:
+        print(
+            f"  cortex credits  {credits_used:.3f} of ~{TRIAL_DAILY_CREDIT_CAP:.0f}/day "
+            f"({credits_block['percent_of_daily_cap']:.1f}%)   {swept_tokens:,} tok"
+        )
+    else:
+        spend = sum(r.cost_usd for mode in MODES for r in results[mode])
+        billed = "BILLED" if settings.cortex_provider == "openai" else "not billed — simulators"
+        print(f"  sweep spend  ${spend:.4f}   {swept_tokens:,} tok   [{billed}]")
     print(f"  prompt size   naive {payload['input_tokens_mean']['naive']:,.0f} tok   "
           f"tiered {payload['input_tokens_mean']['tiered']:,.0f} tok   "
           "(same content, different layout)")

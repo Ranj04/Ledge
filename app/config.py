@@ -25,14 +25,16 @@ def _env_int(key: str, default: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Pricing.  ONE place.  When real Cortex pricing is confirmed at the event this
-# is a one-line change and every number downstream moves with it.
+# Pricing.  ONE place.  Every number downstream moves with it.
 #
-# Rates are USD per 1,000,000 tokens.  The defaults are Anthropic's public
-# Claude Sonnet 4.5 list prices, which Cortex bills against a credit multiplier
-# rather than dollars.  We report dollars because that is what an audience
-# understands; the *ratio* between cached and uncached is what our claim rests
-# on, and that ratio (0.1x read, 1.25x write) is the part we are confident in.
+# Rates are USD per 1,000,000 tokens, taken from OpenAI's published pricing for
+# `gpt-5.6-terra` on 2026-08-07: $2.00 input, $0.20 cached input, $12.00 output,
+# $2.50 cache write.  Those cached and write figures are exactly 0.1x and 1.25x
+# the input rate — the same multipliers Anthropic and Cortex use, which is why
+# swapping the inference provider left `app/telemetry/` untouched.
+#
+# The *ratio* between cached and uncached is what the claim rests on; the
+# absolute rate only sets the size of the dollar figure on screen.
 # ---------------------------------------------------------------------------
 
 
@@ -63,10 +65,10 @@ TRIAL_DAILY_CREDIT_CAP = 10.0
 
 @dataclass(frozen=True)
 class Pricing:
-    model: str = "claude-sonnet-4-5"
-    input_per_mtok: float = 3.00
-    output_per_mtok: float = 15.00
-    # Cache read is 0.1x base input; 5-minute cache write is 1.25x base input.
+    model: str = "gpt-5.6-terra"
+    input_per_mtok: float = 2.00
+    output_per_mtok: float = 12.00
+    # Cache read is 0.1x base input; cache write is 1.25x base input.
     cache_read_multiplier: float = 0.10
     cache_write_multiplier: float = 1.25
 
@@ -91,6 +93,13 @@ class Settings:
     cortex_base_url_override: str = field(default_factory=lambda: _env("CORTEX_BASE_URL"))
     cortex_model: str = field(
         default_factory=lambda: _env("CORTEX_MODEL", "claude-sonnet-4-5")
+    )
+
+    # OpenAI — inference, since the Snowflake trial carries no Cortex
+    # entitlement on any surface (DECISIONS.md D20).
+    openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY"))
+    openai_model: str = field(
+        default_factory=lambda: _env("OPENAI_MODEL", "gpt-5.6-terra")
     )
 
     snowflake_user: str = field(default_factory=lambda: _env("SNOWFLAKE_USER"))
@@ -142,8 +151,13 @@ class Settings:
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", "INFO"))
 
     @property
+    def active_model(self) -> str:
+        """The model actually serving inference, whichever provider is selected."""
+        return self.openai_model if self.cortex_provider == "openai" else self.cortex_model
+
+    @property
     def pricing(self) -> Pricing:
-        return Pricing(model=self.cortex_model)
+        return Pricing(model=self.active_model)
 
     @property
     def cortex_base_url(self) -> str:
@@ -173,7 +187,13 @@ def reset_settings_cache() -> None:
 
 def make_cortex_client():
     s = get_settings()
+    if s.cortex_provider == "openai":
+        from app.cortex.openai_client import OpenAIClient
+
+        return OpenAIClient()
     if s.cortex_provider == "real":
+        # Snowflake Cortex.  Kept working: if the entitlement is granted on-site,
+        # the pivot back is this one environment variable.
         from app.cortex.real_client import RealCortexClient
 
         return RealCortexClient()
@@ -211,5 +231,5 @@ def provider_status() -> dict[str, str]:
         "cortex": s.cortex_provider,
         "everos": s.everos_provider,
         "ledger": s.ledger_provider,
-        "model": s.cortex_model,
+        "model": s.active_model,
     }
