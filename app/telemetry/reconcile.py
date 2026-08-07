@@ -8,6 +8,14 @@ ledger agrees with Snowflake's own record of what we spent" — and must never b
 wired to the live meter. If a judge asks "how do we know your numbers are
 real?", this is the answer; it is not the demo.
 
+**It also compares account-wide totals against our application's rows.** The
+account-usage view has no application or request tag we can filter on, so any
+other Cortex traffic on the same account, in the same hour, on the same model
+lands in `THEIR_*` and shows up as a discrepancy that is not ours. The result
+carries a `precondition` field saying so. Treat agreement as evidence and
+disagreement as "check whether anything else was running" — not as a defect in
+our ledger.
+
 Written tonight, unexercised. See BLOCKERS.md B4.
 """
 
@@ -132,6 +140,12 @@ async def reconcile(hours: int = 24) -> dict[str, Any]:
         "note": (
             "CORTEX_REST_API_USAGE_HISTORY lags up to 45 minutes. Recent hours may show "
             "our calls with no counterpart yet; that is expected, not a discrepancy."
+        ),
+        "precondition": (
+            "The account-usage view carries no application tag, so THEIR_* totals include "
+            "every Cortex call on this account — not only MemoryLedger's. This comparison "
+            "is only meaningful on an account where nothing else is calling the same model "
+            "in the same hour."
         ),
         "hours": hours,
         "rows": [r.__dict__ for r in parsed],

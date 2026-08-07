@@ -328,6 +328,46 @@ def test_promotion_is_allowed_mid_session():
     assert tiers[0] == 3 and tiers[-1] == 1
 
 
+def test_a_timestamp_without_a_timezone_does_not_crash_tiering():
+    """EverOS is not guaranteed to send an offset. A naive datetime subtracted
+    from an aware one raises TypeError inside `assemble`, which is upstream of
+    the chat endpoint's error handler — so it would take the request down
+    rather than degrade."""
+    r = reg()
+    m = mem("mem_naive", "profile", "No offset on my timestamp.", updated="2026-07-01T00:00:00")
+    assert r.observe(m, session_id="s", now=NOW) == 1
+
+    naive_now = NOW.replace(tzinfo=None)
+    assert r.observe(mem("mem_2", "profile", "x"), session_id="s", now=naive_now) == 1
+
+
+def test_an_unparseable_timestamp_is_treated_as_unproven():
+    r = reg()
+    m = mem("mem_bad", "profile", "Nonsense timestamp.", updated="not-a-date")
+    assert r.observe(m, session_id="s", now=NOW) == HOLDING_TIER
+
+
+def test_a_snapshot_does_not_disturb_the_registry_it_came_from():
+    """The inspector runs the Assembler to preview the next call. `observe`
+    mutates MemoryState in place, so sharing the objects let three inspector
+    calls promote a memory into a cached tier with no model call at all."""
+    live = reg()
+    m = mem("mem_x", "profile", "Freshly written.", updated=FRESH)
+    live.observe(m, session_id="s", now=NOW)
+    before = live.state("mem_x")
+    assert (before.stable_calls, before.tier) == (0, HOLDING_TIER)
+
+    preview = live.snapshot()
+    for _ in range(5):
+        preview.observe(m, session_id="s", now=NOW)
+
+    assert preview.state("mem_x").tier == 1, "the preview itself still advances"
+    after = live.state("mem_x")
+    assert (after.stable_calls, after.tier) == (0, HOLDING_TIER), (
+        "but the live registry must be untouched"
+    )
+
+
 def test_natural_tier_is_recorded_even_when_a_memory_is_held():
     r = reg()
     m = mem("mem_new", "profile", "Just written.", updated=FRESH)

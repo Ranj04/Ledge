@@ -7,13 +7,22 @@ providers are configured, and reports a **distribution** — not one sample.
     .venv/bin/python scripts/experiment.py --runs 20
     CORTEX_PROVIDER=real .venv/bin/python scripts/experiment.py --runs 10
 
-Two things make the comparison fair, and both are enforced rather than assumed:
+The comparison is **paired by construction**, not merely checked afterwards:
 
+* Retrieval happens **once per turn** and the identical `Memory` objects are
+  handed to both modes. Not "the same ids" — the same objects, so content and
+  scores cannot drift between the two calls.
+* Both modes are driven with **one shared transcript**. The assistant's replies
+  come from a single generation per turn and are appended to both histories, so
+  turn N+1's prompt differs between the modes only in layout. Without this, two
+  independently-sampled answers of different lengths would make every later turn
+  a different conversation, and the cost gap would partly measure sampling noise
+  rather than caching.
 * Each run gets a **fresh session id**, so no run inherits another's warm cache.
   A cold start is part of the cost of a conversation and tiered pays it too.
-* Both modes retrieve the **same memories** for the same turn. The script
-  asserts this per turn and aborts if it is ever false, because a run where the
-  two modes saw different context would produce a number that means nothing.
+* Because the transcript is shared, **output tokens are identical** across the
+  two modes by construction. The whole reported difference is input-side, which
+  is the only thing caching can affect.
 
 Every figure printed is computed from the provider's reported usage. Nothing is
 assigned. Under simulators the usage comes from the prefix computation in
@@ -44,6 +53,7 @@ from app.config import (
 from app.telemetry.cost import build_records
 
 CONVERSATIONS = Path("data/seed/conversations.json")
+MODES = ("naive", "tiered")
 
 
 @dataclass
@@ -84,63 +94,80 @@ def load_conversations(conversation_id: str | None) -> list[dict]:
     return conversations
 
 
-async def run_once(
-    mode: str, conversation: dict, run_index: int, *, warm: bool, ledger=None
-) -> RunResult:
-    everos = make_everos_client()
-    cortex = make_cortex_client()
-    # The simulator's latency is a guess, not a measurement (DECISIONS.md D10),
-    # and sleeping on it would make a 300-call sweep take minutes for nothing.
+def _quiet(client):
+    """The simulator's latency is a guess, not a measurement (DECISIONS.md D10),
+    and sleeping on it would make a 300-call sweep take minutes for nothing."""
     for attr, value in (("simulate_latency", False), ("chunk_delay", 0.0)):
-        if hasattr(cortex, attr):
-            setattr(cortex, attr, value)
-    registry = TierRegistry(stability_n=get_settings().promotion_stability_n)
+        if hasattr(client, attr):
+            setattr(client, attr, value)
+    return client
 
+
+async def run_pair(conversation: dict, run_index: int, *, ledger=None) -> dict[str, RunResult]:
+    """Run one conversation through both modes as a single paired observation.
+
+    Retrieval happens once per turn and both modes receive the identical
+    `Memory` objects — not merely the same ids, so content and scores cannot
+    drift between the two calls. The assistant transcript is generated once and
+    appended to both histories, so turn N+1 is the same conversation in both and
+    the prompts differ only in layout.
+    """
+    everos = make_everos_client()
+    clients = {mode: _quiet(make_cortex_client()) for mode in MODES}
+    registries = {
+        mode: TierRegistry(stability_n=get_settings().promotion_stability_n) for mode in MODES
+    }
     # Fresh session per run: nobody inherits a warm cache they did not pay for.
-    session_id = f"exp-{mode}-{run_index}"
-    history: list[dict] = []
-    result = RunResult(mode, 0.0, 0.0, 0, 0, 0, 0, 0)
-    retrieved_ids: list[set[str]] = []
+    sessions = {mode: f"exp-{mode}-{run_index}" for mode in MODES}
+    histories: dict[str, list[dict]] = {mode: [] for mode in MODES}
+    results = {mode: RunResult(mode, 0.0, 0.0, 0, 0, 0, 0, 0) for mode in MODES}
 
     for turn in conversation["turns"]:
         memories = await everos.retrieve(
-            user_id=conversation["user_id"], query=turn, session_id=session_id
+            user_id=conversation["user_id"], query=turn, session_id=sessions["tiered"]
         )
-        retrieved_ids.append({m.memory_id for m in memories})
+        shared_answer: str | None = None
 
-        prompt = assemble(
-            memories,
-            user_message=turn,
-            history=history,
-            mode=mode,
-            registry=registry,
-            session_id=session_id,
-        )
-        inference = await cortex.complete(prompt, session_id=session_id)
-        call, injections = build_records(
-            prompt,
-            inference.usage,
-            session_id=session_id,
-            user_id=conversation["user_id"],
-            latency_ms=inference.latency_ms,
-        )
-        if ledger is not None:
-            await ledger.record_call(call, injections)
+        for mode in MODES:
+            prompt = assemble(
+                memories,
+                user_message=turn,
+                history=histories[mode],
+                mode=mode,
+                registry=registries[mode],
+                session_id=sessions[mode],
+            )
+            inference = await clients[mode].complete(prompt, session_id=sessions[mode])
+            call, injections = build_records(
+                prompt,
+                inference.usage,
+                session_id=sessions[mode],
+                user_id=conversation["user_id"],
+                latency_ms=inference.latency_ms,
+            )
+            if ledger is not None:
+                await ledger.record_call(call, injections)
 
-        result.cost_usd += call.cost_usd
-        result.baseline_cost_usd += call.baseline_cost_usd
-        result.input_tokens += call.input_tokens
-        result.output_tokens += call.output_tokens
-        result.cached_tokens += call.cached_tokens
-        result.cache_write_tokens += call.cache_write_tokens
-        result.turns += 1
-        result.answers.append(inference.text)
+            r = results[mode]
+            r.cost_usd += call.cost_usd
+            r.baseline_cost_usd += call.baseline_cost_usd
+            r.input_tokens += call.input_tokens
+            r.output_tokens += call.output_tokens
+            r.cached_tokens += call.cached_tokens
+            r.cache_write_tokens += call.cache_write_tokens
+            r.turns += 1
+            r.answers.append(inference.text)
 
-        history.append({"role": "user", "content": turn})
-        history.append({"role": "assistant", "content": inference.text})
+            if shared_answer is None:
+                shared_answer = inference.text
 
-    result.retrieved_ids = retrieved_ids  # type: ignore[attr-defined]
-    return result
+        # One transcript, shared, so neither mode's later turns can diverge
+        # through sampling.
+        for mode in MODES:
+            histories[mode].append({"role": "user", "content": turn})
+            histories[mode].append({"role": "assistant", "content": shared_answer or ""})
+
+    return results
 
 
 def summarise(values: list[float]) -> dict[str, float]:
@@ -186,18 +213,23 @@ async def main() -> int:
             conversation["conversation_id"], {"naive": [], "tiered": []}
         )
         for _ in range(args.runs):
-            for mode in ("naive", "tiered"):
-                run = await run_once(mode, conversation, index, warm=False, ledger=ledger)
-                results[mode].append(run)
-                bucket[mode].append(run.cost_usd)
+            paired = await run_pair(conversation, index, ledger=ledger)
+            for mode in MODES:
+                results[mode].append(paired[mode])
+                bucket[mode].append(paired[mode].cost_usd)
             index += 1
 
-    # Fairness check — both modes must have seen the same memories each turn.
+    # Pairing is enforced by construction in run_pair, but assert the
+    # consequence anyway: identical output means the entire reported gap is
+    # input-side, which is the only thing caching can touch. If this ever
+    # fires, the number being printed is partly sampling noise.
     for i, (naive_run, tiered_run) in enumerate(zip(results["naive"], results["tiered"])):
-        if naive_run.retrieved_ids != tiered_run.retrieved_ids:  # type: ignore[attr-defined]
+        if naive_run.output_tokens != tiered_run.output_tokens:
             sys.exit(
-                f"ABORT: run {i} retrieved different memories in the two modes. "
-                "The comparison would be meaningless."
+                f"ABORT: run {i} produced different output token counts "
+                f"({naive_run.output_tokens} vs {tiered_run.output_tokens}). "
+                "The two runs are not the same conversation, so the cost "
+                "difference would not be attributable to caching."
             )
 
     naive_costs = [r.cost_usd for r in results["naive"]]

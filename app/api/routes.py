@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from app.api.schemas import ChatRequest, InspectRequest
 from app.api.service import Service, get_service
 from app.assembler.assemble import assemble
-from app.assembler.tiering import TIER_NAMES, TIER_SOURCE
+from app.assembler.tiering import TIER_NAMES, TIER_SOURCE, TierRegistry
 from app.contracts import AssembledPrompt, Usage
 from app.cortex.tokens import count_tokens
 from app.telemetry.cost import build_records
@@ -238,15 +238,18 @@ async def inspect(req: InspectRequest) -> dict[str, Any]:
     service = svc()
     memories = await service.everos.retrieve(user_id=req.user_id, query=req.message)
 
-    # A throwaway registry, seeded from the live session's tier state if there
-    # is one, so the inspector shows the tiers the next real call would use.
-    from app.assembler.tiering import TierRegistry
-
+    # A throwaway registry seeded from the live session's tier state, so the
+    # inspector shows the tiers the next real call would use.
+    #
+    # The states must be COPIES. `assemble(mode="tiered")` calls `observe`,
+    # which increments `stable_calls` and can promote a tier. Sharing the
+    # objects meant three inspector calls could promote a memory into a cached
+    # tier without a single model call ever happening — the dry run silently
+    # changing the thing it claims to be previewing.
     live = service.sessions.get(req.session_id)
-    registry = TierRegistry(stability_n=service.settings.promotion_stability_n)
-    if live is not None:
-        for state in live.registry.states():
-            registry._states[state.memory_id] = state
+    registry = live.registry.snapshot() if live is not None else TierRegistry(
+        stability_n=service.settings.promotion_stability_n
+    )
 
     out = {}
     for mode in ("naive", "tiered"):
@@ -303,12 +306,18 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
         )
         index += 1
 
-    # Which tiers ended up inside a message rather than the system block. The
-    # inspector has to name them, or the tiered column looks like it dropped
-    # context that the naive column carries.
-    message_tiers = sorted(
-        {b.tier for b in prompt.system_blocks} ^ {t for t, n in prompt.tier_tokens.items() if n}
-    )
+    # Which memories ended up inside a message rather than the system block.
+    # The inspector has to name them, or the tiered column looks like it
+    # dropped context that the naive column carries.
+    #
+    # Derived from where the memories actually are, not from comparing tier
+    # numbers: in `naive` a single block carries every tier, so any inference
+    # from the block's own `tier` field would claim the final message holds
+    # memories that are sitting in the system block.
+    in_system = {mid for b in prompt.system_blocks for mid in b.memory_ids}
+    in_message = [i for i in prompt.injected if i.memory_id not in in_system]
+    message_tiers = sorted({i.tier for i in in_message})
+    message_memory_ids = [i.memory_id for i in in_message]
 
     messages = []
     for msg in prompt.messages:
@@ -316,8 +325,12 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
         parts = (
             [{"text": content}] if isinstance(content, str) else content
         )
-        for part in parts:
-            text = part.get("text", "")
+        for j, part in enumerate(parts):
+            # Count exactly what `flatten_prompt` bills, role marker included —
+            # the inspector must not display a total the simulator disagrees
+            # with, even by seven tokens.
+            prefix = f"\n\n{msg['role']}: " if j == 0 else ""
+            text = prefix + part.get("text", "")
             tokens = count_tokens(text)
             cumulative += tokens
             # Only the final user turn carries memory content.
@@ -335,9 +348,7 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
                     # Parity with `blocks`: which memories are actually in here.
                     # `preview` truncates, so this is the only reliable way to
                     # tell what the volatile band contains.
-                    "memory_ids": [
-                        i.memory_id for i in prompt.injected if i.tier in carries
-                    ],
+                    "memory_ids": message_memory_ids if carries else [],
                     "label": _message_label(msg["role"], carries),
                     "preview": text[:400],
                 }

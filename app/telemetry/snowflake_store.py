@@ -53,16 +53,25 @@ class SnowflakeLedgerStore:
     def __init__(self) -> None:
         self.settings = get_settings()
 
-    def _connect(self):
+    def _connect(self, *, bootstrap: bool = False):
+        """Open a connection.
+
+        `bootstrap=True` omits database and schema, because the connector
+        resolves them at connect time — so on a fresh account the connection
+        that is supposed to run `CREATE DATABASE` would be rejected for the
+        database not existing, and the service would fail to start before it
+        could create anything.
+        """
         import snowflake.connector
 
         s = self.settings
         kwargs: dict[str, Any] = {
             "account": s.snowflake_account,
             "user": s.snowflake_user,
-            "database": s.snowflake_database,
-            "schema": s.snowflake_schema,
         }
+        if not bootstrap:
+            kwargs["database"] = s.snowflake_database
+            kwargs["schema"] = s.snowflake_schema
         if s.snowflake_warehouse:
             kwargs["warehouse"] = s.snowflake_warehouse
         if s.snowflake_role:
@@ -94,16 +103,16 @@ class SnowflakeLedgerStore:
     # -- LedgerStore -------------------------------------------------------
 
     async def init_schema(self) -> None:
+        db, schema = self.settings.snowflake_database, self.settings.snowflake_schema
+
         def go():
-            with self._connect() as conn:
+            # Bootstrap connection: no database or schema selected, so this
+            # works against an account where neither exists yet.
+            with self._connect(bootstrap=True) as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        f"CREATE DATABASE IF NOT EXISTS {self.settings.snowflake_database}"
-                    )
-                    cur.execute(
-                        f"CREATE SCHEMA IF NOT EXISTS "
-                        f"{self.settings.snowflake_database}.{self.settings.snowflake_schema}"
-                    )
+                    cur.execute(f"CREATE DATABASE IF NOT EXISTS {db}")
+                    cur.execute(f"CREATE SCHEMA IF NOT EXISTS {db}.{schema}")
+                    cur.execute(f"USE SCHEMA {db}.{schema}")
                     for statement in DDL:
                         cur.execute(statement)
 

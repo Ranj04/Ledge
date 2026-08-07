@@ -18,7 +18,7 @@ invalidate anything.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
 from app.contracts import Memory, MemoryType, Tier
@@ -67,12 +67,21 @@ class MemoryState:
 
 
 def _parse_ts(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 timestamp, always returning an aware UTC datetime.
+
+    EverOS is not guaranteed to send an offset, and a naive datetime subtracted
+    from an aware one raises `TypeError` — which would happen inside `assemble`,
+    before the chat endpoint's provider error handler, and take down the whole
+    request rather than degrading. Assume UTC when no offset is given; that is
+    what every store here emits.
+    """
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 class TierRegistry:
@@ -103,6 +112,19 @@ class TierRegistry:
     def states(self) -> list[MemoryState]:
         return list(self._states.values())
 
+    def snapshot(self) -> TierRegistry:
+        """A detached copy, for previewing what the next call would do.
+
+        `observe` mutates `MemoryState` in place, so a caller that wants to run
+        the Assembler without disturbing live tier bookkeeping must not share
+        these objects. Session pins are copied too, or a preview could appear
+        to demote a memory the live session has pinned.
+        """
+        clone = TierRegistry(stability_n=self.stability_n)
+        clone._states = {k: replace(v) for k, v in self._states.items()}
+        clone._session_pins = {k: dict(v) for k, v in self._session_pins.items()}
+        return clone
+
     def end_session(self, session_id: str) -> None:
         self._session_pins.pop(session_id, None)
 
@@ -123,6 +145,8 @@ class TierRegistry:
 
         if state is None:
             now = now or datetime.now(timezone.utc)
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
             updated = _parse_ts(memory.updated_at or memory.created_at)
             already_stable = updated is not None and (now - updated) >= PRIOR_STABILITY_WINDOW
             state = MemoryState(

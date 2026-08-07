@@ -26,6 +26,8 @@ price but cannot invalidate a cached prefix.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -54,6 +56,12 @@ TYPE_ALIASES: dict[str, MemoryType] = {
 }
 
 
+# How long the profile/procedural set is reused before re-fetching. These
+# change on a scale of weeks; a minute of staleness is invisible and keeps
+# tier 0/1 byte-stable within a conversation.
+STABLE_CACHE_TTL = 60.0
+
+
 class RealEverOSClient:
     def __init__(self) -> None:
         s = get_settings()
@@ -68,6 +76,7 @@ class RealEverOSClient:
             },
             timeout=30.0,
         )
+        self._stable_cache: dict[str, tuple[float, list[Memory]]] = {}
 
     def _scope(self) -> dict[str, str]:
         return {
@@ -78,6 +87,41 @@ class RealEverOSClient:
 
     # -- EverOSClient ------------------------------------------------------
 
+    async def _search(self, body: dict[str, Any], user_id: str) -> list[Memory]:
+        response = await self.client.post("/api/v2/memory/search", json=body)
+        response.raise_for_status()
+        return [_parse_memory(item, user_id, self._scope()) for item in _items(response.json())]
+
+    async def _stable_set(self, user_id: str, now: float) -> list[Memory]:
+        """Every profile and procedural memory, cached briefly.
+
+        These are injected in full on every turn (DECISIONS.md D12) and they
+        change on a scale of weeks, so re-fetching them each turn is a network
+        round trip for the same bytes. A short TTL keeps the tier-0/1 content
+        stable *within* a conversation, which is exactly what the cache needs.
+        """
+        cached = self._stable_cache.get(user_id)
+        if cached and now - cached[0] < STABLE_CACHE_TTL:
+            return cached[1]
+
+        # VERIFY-AT-EVENT: confirm the filter key for memory type. If EverOS
+        # ignores it, the client-side filter below still produces the right
+        # set — just less efficiently.
+        memories = await self._search(
+            {
+                "query": "",
+                "user_id": user_id,
+                "top_k": 500,
+                "method": "keyword",
+                "memory_types": ["profile", "procedural", "agent_skill", "user_profile"],
+                **self._scope(),
+            },
+            user_id,
+        )
+        stable = [m for m in memories if m.memory_type in ("profile", "procedural")]
+        self._stable_cache[user_id] = (now, stable)
+        return stable
+
     async def retrieve(
         self,
         *,
@@ -86,6 +130,15 @@ class RealEverOSClient:
         session_id: str | None = None,
         limit: int = 20,
     ) -> list[Memory]:
+        """Stable memories in full, volatile memories by relevance.
+
+        This mirrors `MockEverOSClient` deliberately. A single blended search
+        with one `top_k` would let volatile memories crowd out profile and
+        procedural ones, so tier 0 and tier 1 membership would change with the
+        question — which is the exact failure the Assembler exists to prevent.
+        Switching providers must change the dependency, not the algorithm.
+        """
+        now = time.monotonic()
         body: dict[str, Any] = {
             "query": query,
             "user_id": user_id,
@@ -99,9 +152,17 @@ class RealEverOSClient:
         if session_id:
             body["session_id"] = session_id
 
-        response = await self.client.post("/api/v2/memory/search", json=body)
-        response.raise_for_status()
-        return [_parse_memory(item, user_id, self._scope()) for item in _items(response.json())]
+        stable, retrieved = await asyncio.gather(
+            self._stable_set(user_id, now), self._search(body, user_id)
+        )
+
+        seen = {m.memory_id for m in stable}
+        volatile = [
+            m
+            for m in retrieved
+            if m.memory_type in ("semantic", "episodic") and m.memory_id not in seen
+        ]
+        return [*stable, *volatile]
 
     async def write(
         self,

@@ -74,15 +74,27 @@ class Service:
         await self.ledger.init_schema()
 
     def session(self, session_id: str, user_id: str) -> Session:
+        """Get or create a session.
+
+        A session belongs to one user. If the same id arrives for a different
+        user we start a fresh session rather than handing over the first user's
+        history, cache namespace and running totals — that would leak one
+        student's conversation into another's prompt and mis-attribute the cost.
+        """
         existing = self.sessions.get(session_id)
-        if existing is None:
-            existing = Session(
-                session_id=session_id,
-                user_id=user_id,
-                registry=TierRegistry(stability_n=self.settings.promotion_stability_n),
-            )
-            self.sessions[session_id] = existing
-        return existing
+        if existing is not None and existing.user_id == user_id:
+            return existing
+        if existing is not None and hasattr(self.cortex, "reset"):
+            # The provider cache is keyed by session id too; drop the previous
+            # owner's prefixes so nothing of theirs can be read back.
+            self.cortex.reset(session_id)
+        created = Session(
+            session_id=session_id,
+            user_id=user_id,
+            registry=TierRegistry(stability_n=self.settings.promotion_stability_n),
+        )
+        self.sessions[session_id] = created
+        return created
 
     # -- read-only views ---------------------------------------------------
 

@@ -266,6 +266,67 @@ def test_the_tutor_remembers_across_sessions(client):
     )
 
 
+def test_inspect_accounts_for_every_memory_exactly_once_in_both_modes(client):
+    """The inspector's whole job is to show that the same content is in both
+    columns. If a band claims memories that are actually elsewhere, the panel
+    argues against us — naive puts every memory in one system block, so its
+    final message must claim none."""
+    body = client.post(
+        "/api/inspect",
+        json={"user_id": USER, "message": "limiting reagents", "session_id": "acct"},
+    ).json()
+
+    for mode in ("naive", "tiered"):
+        layout = body["modes"][mode]
+        from_blocks = [i for b in layout["blocks"] for i in b["memory_ids"]]
+        from_messages = [i for m in layout["messages"] for i in m.get("memory_ids", [])]
+        combined = from_blocks + from_messages
+
+        assert len(combined) == len(set(combined)), f"{mode}: a memory is claimed twice"
+        assert len(combined) == body["memory_count"], f"{mode}: memories unaccounted for"
+
+    naive_final = body["modes"]["naive"]["messages"][-1]
+    assert naive_final["carries_tiers"] == []
+    assert naive_final["memory_ids"] == []
+    assert naive_final["label"] == "user message"
+
+    tiered_final = body["modes"]["tiered"]["messages"][-1]
+    assert tiered_final["carries_tiers"] == [2, 3]
+    assert tiered_final["memory_ids"], "the volatile band must name what it holds"
+
+
+def test_the_inspectors_token_total_matches_what_the_simulator_bills(client):
+    """A displayed number must not disagree with the billed one, even slightly.
+    The inspector originally omitted the role marker that `flatten_prompt`
+    counts, so it under-reported by ~7 tokens per prompt."""
+    import asyncio
+
+    from app.api.service import get_service
+    from app.assembler.assemble import assemble
+    from app.assembler.tiering import TierRegistry
+    from app.api.routes import _describe
+    from app.cortex.cache_sim import flatten_prompt
+    from app.cortex.tokens import count_tokens
+
+    service = get_service()
+    history = [
+        {"role": "user", "content": "earlier question"},
+        {"role": "assistant", "content": "earlier answer"},
+    ]
+
+    async def check(mode: str) -> tuple[int, int]:
+        mems = await service.everos.retrieve(user_id=USER, query="limiting reagents")
+        prompt = assemble(mems, user_message="next question", history=history,
+                          mode=mode, registry=TierRegistry(), session_id="tok")
+        shown = _describe(prompt, 1024)["total_tokens"]
+        billed = sum(count_tokens(b.text) for b in flatten_prompt(prompt))
+        return shown, billed
+
+    for mode in ("naive", "tiered"):
+        shown, billed = asyncio.run(check(mode))
+        assert shown == billed, f"{mode}: inspector says {shown}, simulator bills {billed}"
+
+
 def test_inspect_does_not_disturb_the_live_session(client):
     """An inspector that warmed the cache would change the thing it inspects."""
     send(client, "help with limiting reagents", session="quiet")
@@ -276,3 +337,53 @@ def test_inspect_does_not_disturb_the_live_session(client):
         )
     after = send(client, "and percent yield", session="quiet")
     assert after["cached_tokens"] > 0, "the real session's cache should be untouched"
+
+
+def test_a_session_id_reused_by_another_user_starts_clean(client):
+    """Sessions were keyed by id alone, so the same id from a second user
+    inherited the first user's history, cache namespace and running totals —
+    a context leak and wrong per-session accounting at the same time."""
+    send(client, "help with limiting reagents", session="shared")
+    second = client.stream(
+        "POST",
+        "/api/chat",
+        json={"user_id": "stu_liam_ortiz", "session_id": "shared",
+              "message": "help with quadratics", "mode": "tiered"},
+    )
+    with second as response:
+        done = None
+        event = None
+        for line in response.iter_lines():
+            if line.startswith("event:"):
+                event = line.split(":", 1)[1].strip()
+            elif line.startswith("data:") and event == "done":
+                done = json.loads(line.split(":", 1)[1])
+
+    assert done is not None
+    assert done["session"]["calls"] == 1, "the second user must not inherit the first's totals"
+    assert done["cached_tokens"] == 0, "nor read anything from the first user's cache"
+
+    from app.api.service import get_service
+
+    assert get_service().sessions["shared"].user_id == "stu_liam_ortiz"
+
+
+def test_inspect_does_not_advance_the_live_tier_registry(client):
+    """Stronger than the cache check above, and the bug it caught was real:
+    `observe` mutates MemoryState in place, so passing live states into the
+    preview registry let repeated inspector calls promote memories into cached
+    tiers without a single model call."""
+    from app.api.service import get_service
+
+    send(client, "help with limiting reagents", session="drift")
+    registry = get_service().sessions["drift"].registry
+    before = {s.memory_id: (s.stable_calls, s.tier) for s in registry.states()}
+
+    for _ in range(5):
+        client.post(
+            "/api/inspect",
+            json={"user_id": USER, "message": "percent yield", "session_id": "drift"},
+        )
+
+    after = {s.memory_id: (s.stable_calls, s.tier) for s in registry.states()}
+    assert after == before, "the dry run changed the state it was previewing"
