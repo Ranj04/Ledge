@@ -148,7 +148,9 @@ function Transcript({
   onStarter: (prompt: string) => void
 }) {
   const endRef = useRef<HTMLDivElement>(null)
-  useEffect(() => endRef.current?.scrollIntoView({ block: 'end' }), [messages])
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'end' })
+  }, [messages])
 
   if (!messages.length) {
     return (

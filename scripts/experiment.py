@@ -35,7 +35,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.assembler.assemble import assemble
 from app.assembler.tiering import TierRegistry
-from app.config import get_settings, make_cortex_client, make_everos_client
+from app.config import (
+    get_settings,
+    make_cortex_client,
+    make_everos_client,
+    make_ledger_store,
+)
 from app.telemetry.cost import build_records
 
 CONVERSATIONS = Path("data/seed/conversations.json")
@@ -79,7 +84,9 @@ def load_conversations(conversation_id: str | None) -> list[dict]:
     return conversations
 
 
-async def run_once(mode: str, conversation: dict, run_index: int, *, warm: bool) -> RunResult:
+async def run_once(
+    mode: str, conversation: dict, run_index: int, *, warm: bool, ledger=None
+) -> RunResult:
     everos = make_everos_client()
     cortex = make_cortex_client()
     # The simulator's latency is a guess, not a measurement (DECISIONS.md D10),
@@ -110,13 +117,15 @@ async def run_once(mode: str, conversation: dict, run_index: int, *, warm: bool)
             session_id=session_id,
         )
         inference = await cortex.complete(prompt, session_id=session_id)
-        call, _ = build_records(
+        call, injections = build_records(
             prompt,
             inference.usage,
             session_id=session_id,
             user_id=conversation["user_id"],
             latency_ms=inference.latency_ms,
         )
+        if ledger is not None:
+            await ledger.record_call(call, injections)
 
         result.cost_usd += call.cost_usd
         result.baseline_cost_usd += call.baseline_cost_usd
@@ -154,10 +163,20 @@ async def main() -> int:
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--conversation", default=None)
     parser.add_argument("--json", action="store_true", help="emit machine-readable output")
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help="write every call to the ledger, so the dashboard has real rows to show",
+    )
     args = parser.parse_args()
 
     settings = get_settings()
     conversations = load_conversations(args.conversation)
+
+    ledger = None
+    if args.record:
+        ledger = make_ledger_store()
+        await ledger.init_schema()
 
     results: dict[str, list[RunResult]] = {"naive": [], "tiered": []}
     per_conversation: dict[str, dict[str, list[float]]] = {}
@@ -168,7 +187,7 @@ async def main() -> int:
         )
         for _ in range(args.runs):
             for mode in ("naive", "tiered"):
-                run = await run_once(mode, conversation, index, warm=False)
+                run = await run_once(mode, conversation, index, warm=False, ledger=ledger)
                 results[mode].append(run)
                 bucket[mode].append(run.cost_usd)
             index += 1
