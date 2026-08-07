@@ -76,7 +76,7 @@ class Settings:
         default_factory=lambda: _env("SNOWFLAKE_DATABASE", "MEMORYLEDGER")
     )
     snowflake_schema: str = field(
-        default_factory=lambda: _env("SNOWFLAKE_SCHEMA", "PUBLIC")
+        default_factory=lambda: _env("SNOWFLAKE_SCHEMA", "LEDGER")
     )
 
     # EverOS

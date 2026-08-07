@@ -21,10 +21,43 @@ CONVERSATIONS_PATH = Path("data/seed/conversations.json")
 
 @dataclass
 class Session:
+    """Live conversation state.
+
+    The running totals are kept here rather than read back from the ledger.
+    Ledger writes happen in a background task *after* the response is sent, so
+    querying it to build the current turn's payload would race: two quick turns
+    and the meter under-reports. In-memory totals are exact, synchronous, and
+    keep a database read off the request path.
+    """
+
     session_id: str
     user_id: str
     history: list[dict] = field(default_factory=list)
     registry: TierRegistry = field(default_factory=TierRegistry)
+
+    calls: int = 0
+    cost_usd: float = 0.0
+    baseline_cost_usd: float = 0.0
+    input_tokens: int = 0
+    cached_tokens: int = 0
+
+    def record(self, call) -> None:
+        self.calls += 1
+        self.cost_usd += call.cost_usd
+        self.baseline_cost_usd += call.baseline_cost_usd
+        self.input_tokens += call.input_tokens
+        self.cached_tokens += call.cached_tokens
+
+    def totals(self) -> dict:
+        return {
+            "calls": self.calls,
+            "cost_usd": self.cost_usd,
+            "baseline_cost_usd": self.baseline_cost_usd,
+            "saved_usd": self.baseline_cost_usd - self.cost_usd,
+            "cache_hit_rate": (self.cached_tokens / self.input_tokens)
+            if self.input_tokens
+            else 0.0,
+        }
 
 
 class Service:

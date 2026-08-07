@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
-from app.contracts import CallRecord, InjectionRecord, MemoryType, Tier
+from app.contracts import CallRecord, InjectionRecord
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS call_log (
@@ -143,22 +143,19 @@ class SqliteLedgerStore:
         async with self._lock:
             await self._run(go)
 
-    async def upsert_memory(
-        self,
-        *,
-        memory_id: str,
-        user_id: str,
-        memory_type: MemoryType,
-        content_hash: str,
-        tier: Tier,
-        stable_calls: int,
-        tokens: int,
-    ) -> None:
+    async def upsert_memories(self, rows: Sequence[dict[str, Any]]) -> None:
+        if not rows:
+            return
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        values = [
+            (r["memory_id"], r["user_id"], r["memory_type"], r["content_hash"],
+             r["tier"], r["stable_calls"], r["tokens"], now, now)
+            for r in rows
+        ]
 
         def go():
             with self._connect() as conn:
-                conn.execute(
+                conn.executemany(
                     """INSERT INTO memory_registry
                        (memory_id, user_id, memory_type, content_hash, tier,
                         stable_calls, tokens, first_seen, last_seen)
@@ -169,8 +166,7 @@ class SqliteLedgerStore:
                          stable_calls=excluded.stable_calls,
                          tokens=excluded.tokens,
                          last_seen=excluded.last_seen""",
-                    (memory_id, user_id, memory_type, content_hash, tier,
-                     stable_calls, tokens, now, now),
+                    values,
                 )
 
         async with self._lock:
@@ -211,9 +207,10 @@ class SqliteLedgerStore:
                 return [dict(r) for r in rows]
 
         rows = await self._run(go)
-        # Project to a month from the observed window so the dashboard column
-        # means the same thing whether we have run for an hour or a week.
         for row in rows:
+            row["cost_per_1k_calls_usd"] = _cost_per_1k_calls(
+                row["cost_usd"], row["injections"]
+            )
             row["monthly_cost_usd"] = _project_monthly(
                 row["cost_usd"], row["first_seen"], row["last_seen"]
             )
@@ -322,17 +319,34 @@ class SqliteLedgerStore:
         return await self._run(go)
 
 
-def _project_monthly(cost: float, first_seen: str, last_seen: str) -> float:
-    """Scale an observed cost to 30 days.
+def _cost_per_1k_calls(cost: float, injections: int) -> float:
+    """What this memory costs per 1,000 calls it is injected into.
 
-    Deliberately conservative: a window shorter than an hour is treated as an
-    hour, because extrapolating a month from four seconds of demo traffic
-    produces a large number that means nothing.
+    This is a *rate*, not an extrapolation: it is exactly measured, it needs no
+    assumption about traffic, and it is the number that actually ranks eviction
+    candidates against each other. Prefer it over the monthly projection
+    whenever the observation window is short.
+    """
+    return (cost / injections * 1000.0) if injections else 0.0
+
+
+def _project_monthly(cost: float, first_seen: str, last_seen: str) -> float:
+    """Scale an observed cost to 30 days: cost * 30 / observed_days.
+
+    Deliberately identical to `V_MEMORY_MONTHLY_COST` in `sql/02_rollups.sql`,
+    days floored at 1 — so flipping `LEDGER_PROVIDER` between sqlite and
+    snowflake does not change the number on the dashboard. An earlier version
+    floored at one *hour*, which made the same ledger read 24x higher on
+    SQLite than on Snowflake. Two stores of the same data must agree.
+
+    This is an extrapolation and the UI must label it as one. Over a demo-length
+    window it is close to meaningless on its own; `cost_per_1k_calls_usd` is the
+    honest companion figure.
     """
     try:
         start = datetime.fromisoformat(first_seen.replace("Z", "+00:00"))
         end = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
         return cost
-    hours = max((end - start).total_seconds() / 3600.0, 1.0)
-    return cost * (30 * 24 / hours)
+    days = max((end - start).total_seconds() / 86400.0, 1.0)
+    return cost * (30.0 / days)

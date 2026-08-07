@@ -131,6 +131,53 @@ def test_flipping_the_toggle_lowers_the_cost_for_the_same_turns(client):
     assert tiered_total < naive_total
 
 
+def test_session_totals_are_exact_and_do_not_race_the_background_writer(client):
+    """The meter is computed from in-memory session state, not read back from
+    the ledger — ledger writes happen after the response, so querying it here
+    would under-report on quick successive turns."""
+    turns = ["help with limiting reagents", "why moles first", "how much Cu"]
+    payloads = [send(client, t, session="totals") for t in turns]
+
+    assert [p["session"]["calls"] for p in payloads] == [1, 2, 3]
+    assert payloads[-1]["session"]["cost_usd"] == pytest.approx(
+        sum(p["cost_usd"] for p in payloads)
+    )
+    assert payloads[-1]["session"]["saved_usd"] == pytest.approx(
+        sum(p["baseline_cost_usd"] - p["cost_usd"] for p in payloads)
+    )
+
+
+def test_the_first_tiered_turn_honestly_reports_a_loss(client):
+    """Writing the cache costs 1.25x and there is nothing to read yet, so turn
+    one really is more expensive. We show that rather than clamping it to zero."""
+    first = send(client, "help with limiting reagents", session="honest")
+    assert first["saved_usd"] < 0
+
+    second = send(client, "why moles first", session="honest")
+    assert second["session"]["saved_usd"] > 0, "and it pays back by the second turn"
+
+
+def test_the_memory_registry_is_populated_with_the_right_tiers(client):
+    """This write used to go through a lookup that only existed on the
+    simulator, so against real EverOS it silently wrote nothing."""
+    send(client, "help with limiting reagents", session="reg")
+
+    import sqlite3
+
+    from app.config import get_settings
+
+    conn = sqlite3.connect(get_settings().sqlite_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT memory_type, tier, COUNT(*) n FROM memory_registry GROUP BY memory_type, tier"
+    ).fetchall()
+    conn.close()
+
+    tiers = {r["memory_type"]: r["tier"] for r in rows}
+    assert tiers == {"procedural": 0, "profile": 1, "semantic": 2, "episodic": 3}
+    assert sum(r["n"] for r in rows) > 50
+
+
 def test_the_ledger_records_the_calls(client):
     send(client, "help with limiting reagents")
     calls = client.get("/api/ledger/calls").json()

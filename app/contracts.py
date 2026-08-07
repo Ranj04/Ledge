@@ -282,18 +282,14 @@ class LedgerStore(Protocol):
     ) -> None:
         ...
 
-    async def upsert_memory(
-        self,
-        *,
-        memory_id: str,
-        user_id: str,
-        memory_type: MemoryType,
-        content_hash: str,
-        tier: Tier,
-        stable_calls: int,
-        tokens: int,
-    ) -> None:
-        """MEMORY_REGISTRY — tier state and drift bookkeeping."""
+    async def upsert_memories(self, rows: Sequence[dict[str, Any]]) -> None:
+        """MEMORY_REGISTRY — tier state and drift bookkeeping.
+
+        Bulk, because this runs once per call over every memory that call
+        injected — a hundred or more. One round trip, not one per row.
+        Each row carries: memory_id, user_id, memory_type, content_hash, tier,
+        stable_calls, tokens.
+        """
         ...
 
     async def memory_costs(

@@ -141,12 +141,12 @@ async def chat(req: ChatRequest, background: BackgroundTasks) -> StreamingRespon
 
         session.history.append({"role": "user", "content": req.message})
         session.history.append({"role": "assistant", "content": answer})
+        session.record(call)
 
         # Everything below this line happens after the browser has the answer.
-        background.add_task(_persist, service, call, injections, req, answer)
+        background.add_task(_persist, service, call, injections, req, memories)
 
-        summary = await service.ledger.call_summary(session_id=req.session_id)
-        yield _sse("done", _done_payload(call, prompt, usage, summary, session_mode=req.mode))
+        yield _sse("done", _done_payload(call, prompt, usage, session.totals()))
 
     return StreamingResponse(
         generate(),
@@ -155,15 +155,7 @@ async def chat(req: ChatRequest, background: BackgroundTasks) -> StreamingRespon
     )
 
 
-def _done_payload(call, prompt: AssembledPrompt, usage: Usage, summary: dict,
-                  session_mode: str) -> dict[str, Any]:
-    row = summary.get("by_mode", {}).get(session_mode, {})
-    session_cost = float(row.get("cost_usd") or 0.0) + call.cost_usd
-    session_baseline = float(row.get("baseline_cost_usd") or 0.0) + call.baseline_cost_usd
-    session_calls = int(row.get("calls") or 0) + 1
-    session_in = float(row.get("input_tokens") or 0) + call.input_tokens
-    session_cached = float(row.get("cached_tokens") or 0) + call.cached_tokens
-
+def _done_payload(call, prompt: AssembledPrompt, usage: Usage, totals: dict) -> dict[str, Any]:
     return {
         "call_id": call.call_id,
         "mode": call.mode,
@@ -183,36 +175,41 @@ def _done_payload(call, prompt: AssembledPrompt, usage: Usage, summary: dict,
             str(t): prompt.tier_was_cached(t, usage.cached_tokens) for t in (0, 1, 2, 3)
         },
         "simulated": bool(usage.raw.get("simulated")),
-        "session": {
-            "calls": session_calls,
-            "cost_usd": session_cost,
-            "baseline_cost_usd": session_baseline,
-            "saved_usd": session_baseline - session_cost,
-            "cache_hit_rate": (session_cached / session_in) if session_in else 0.0,
-        },
+        "session": totals,
     }
 
 
-async def _persist(service: Service, call, injections, req: ChatRequest, answer: str) -> None:
+async def _persist(
+    service: Service, call, injections, req: ChatRequest, memories: list
+) -> None:
     await service.ledger.record_call(call, injections)
 
     session = service.sessions.get(req.session_id)
-    if session is not None:
-        for state in session.registry.states():
-            memory = service.everos.get(state.memory_id) if hasattr(
-                service.everos, "get"
-            ) else None
-            if memory is None:
-                continue
-            await service.ledger.upsert_memory(
-                memory_id=state.memory_id,
-                user_id=req.user_id,
-                memory_type=memory.memory_type,
-                content_hash=state.content_hash,
-                tier=state.tier,
-                stable_calls=state.stable_calls,
-                tokens=count_tokens(f"- {memory.content}\n"),
-            )
+    if session is None:
+        return
+
+    # Registry rows come from the memories this call actually retrieved, not
+    # from a lookup on the client — `get` only exists on the simulator, so
+    # looking up would silently write nothing against real EverOS. One bulk
+    # write, not one connection per memory.
+    rows = []
+    for memory in memories:
+        state = session.registry.state(memory.memory_id)
+        if state is None:
+            continue
+        rows.append(
+            {
+                "memory_id": memory.memory_id,
+                "user_id": req.user_id,
+                "memory_type": memory.memory_type,
+                "content_hash": state.content_hash,
+                "tier": state.tier,
+                "stable_calls": state.stable_calls,
+                "tokens": count_tokens(f"- {memory.content}\n"),
+            }
+        )
+    if rows:
+        await service.ledger.upsert_memories(rows)
 
     # The turn itself becomes an episodic memory — this is what makes the agent
     # remember across sessions, and what generates the memory pressure the

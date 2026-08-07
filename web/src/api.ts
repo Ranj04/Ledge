@@ -1,4 +1,15 @@
-import type { DonePayload, InspectResponse, Mode, Status, Student } from './types'
+import type {
+  AblationResponse,
+  CacheTierRow,
+  DonePayload,
+  FleetResponse,
+  InspectResponse,
+  MemoryBody,
+  MemoryCost,
+  Mode,
+  Status,
+  Student,
+} from './types'
 
 async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -17,6 +28,13 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const getStatus = () => jsonRequest<Status>('/api/status')
 export const getStudents = () => jsonRequest<Student[]>('/api/students')
+export const getMemoryCosts = (userId: string) =>
+  jsonRequest<MemoryCost[]>(`/api/ledger/memory-costs?user_id=${encodeURIComponent(userId)}&days=30`)
+export const getMemories = (userId: string) =>
+  jsonRequest<MemoryBody[]>(`/api/memories?user_id=${encodeURIComponent(userId)}`)
+export const getCacheByTier = () => jsonRequest<CacheTierRow[]>('/api/ledger/cache-by-tier')
+export const getAblations = () => jsonRequest<AblationResponse>('/api/ledger/ablation')
+export const getFleet = () => jsonRequest<FleetResponse>('/api/ledger/fleet')
 
 export function inspectPrompt(
   userId: string,

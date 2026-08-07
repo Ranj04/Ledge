@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from app.config import get_settings
-from app.contracts import CallRecord, InjectionRecord, MemoryType, Tier
+from app.contracts import CallRecord, InjectionRecord
 
 DDL = [
     """CREATE TABLE IF NOT EXISTS CALL_LOG (
@@ -145,23 +145,22 @@ class SnowflakeLedgerStore:
 
         await self._run(go)
 
-    async def upsert_memory(
-        self,
-        *,
-        memory_id: str,
-        user_id: str,
-        memory_type: MemoryType,
-        content_hash: str,
-        tier: Tier,
-        stable_calls: int,
-        tokens: int,
-    ) -> None:
+    async def upsert_memories(self, rows: Sequence[dict[str, Any]]) -> None:
+        if not rows:
+            return
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        params = [
+            (r["memory_id"], r["content_hash"], r["tier"], r["stable_calls"],
+             r["tokens"], now,
+             r["memory_id"], r["user_id"], r["memory_type"], r["content_hash"],
+             r["tier"], r["stable_calls"], r["tokens"], now, now)
+            for r in rows
+        ]
 
         def go():
             with self._connect() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
+                    cur.executemany(
                         """MERGE INTO MEMORY_REGISTRY t
                            USING (SELECT %s AS MEMORY_ID) s ON t.MEMORY_ID = s.MEMORY_ID
                            WHEN MATCHED THEN UPDATE SET
@@ -172,9 +171,7 @@ class SnowflakeLedgerStore:
                               STABLE_CALLS, TOKENS, FIRST_SEEN, LAST_SEEN)
                            VALUES (%s,%s,%s,%s,%s,%s,%s,
                                    TO_TIMESTAMP_NTZ(%s),TO_TIMESTAMP_NTZ(%s))""",
-                        (memory_id, content_hash, tier, stable_calls, tokens, now,
-                         memory_id, user_id, memory_type, content_hash, tier,
-                         stable_calls, tokens, now, now),
+                        params,
                     )
 
         await self._run(go)
@@ -196,8 +193,19 @@ class SnowflakeLedgerStore:
             ORDER BY COST_USD DESC
         """
         rows = await self._run(self._query, sql, (days, user_id, user_id))
+        # Identical projection to SqliteLedgerStore and to V_MEMORY_MONTHLY_COST,
+        # so flipping LEDGER_PROVIDER never changes the dashboard's numbers.
+        from app.telemetry.sqlite_store import _cost_per_1k_calls, _project_monthly
+
         for row in rows:
-            row["monthly_cost_usd"] = row.get("cost_usd", 0.0) * (30.0 / max(days, 1))
+            row["cost_per_1k_calls_usd"] = _cost_per_1k_calls(
+                row.get("cost_usd", 0.0), row.get("injections", 0)
+            )
+            row["monthly_cost_usd"] = _project_monthly(
+                row.get("cost_usd", 0.0),
+                str(row.get("first_seen")),
+                str(row.get("last_seen")),
+            )
         return rows
 
     async def call_summary(

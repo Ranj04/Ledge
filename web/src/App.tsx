@@ -1,12 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getStatus, getStudents, inspectPrompt, streamChat } from './api'
+import {
+  getAblations,
+  getCacheByTier,
+  getFleet,
+  getMemories,
+  getMemoryCosts,
+  getStatus,
+  getStudents,
+  inspectPrompt,
+  streamChat,
+} from './api'
 import type {
+  AblationResponse,
+  CacheTierRow,
   CallCost,
   DonePayload,
+  FleetResponse,
   InspectBlock,
   InspectMessage,
   InspectMode,
   InspectResponse,
+  MemoryBody,
+  MemoryCost,
   Mode,
   Status,
   Student,
@@ -36,6 +51,10 @@ function formatMoney(value?: number, places = 4) {
 
 function formatPercent(value?: number) {
   return value === undefined ? '—' : `${Math.round(value * 100)}%`
+}
+
+function finite(value?: number | null) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
 function useAnimatedNumber(value?: number, duration = 460) {
@@ -433,12 +452,183 @@ function PromptInspector({
   )
 }
 
-function DashboardPlaceholder() {
+const FILL_COMMAND = '.venv/bin/python scripts/experiment.py --runs 4 --record'
+
+function EmptyPanel({ message }: { message: string }) {
   return (
-    <main className="dashboard-placeholder">
-      <span className="eyebrow">NEXT BUILD</span>
-      <h1>Fleet cost dashboard</h1>
-      <p>The tutor is live now. Tenant rollups and memory-level eviction candidates are coming in the next build.</p>
+    <div className="dashboard-empty">
+      <p>{message}</p>
+      <code>{FILL_COMMAND}</code>
+    </div>
+  )
+}
+
+type CostSort = 'monthly_cost_usd' | 'injections' | 'tokens' | 'cache_hit_rate'
+
+function MemoryCostPanel({ costs, memories }: { costs: MemoryCost[]; memories: MemoryBody[] }) {
+  const [sort, setSort] = useState<CostSort>('monthly_cost_usd')
+  const [descending, setDescending] = useState(true)
+  const bodies = new Map(memories.map((memory) => [memory.memory_id, memory.content]))
+  const rows = [...costs].sort((left, right) => {
+    const delta = finite(left[sort]) - finite(right[sort])
+    return descending ? -delta : delta
+  })
+
+  function changeSort(key: CostSort) {
+    if (sort === key) setDescending((current) => !current)
+    else {
+      setSort(key)
+      setDescending(true)
+    }
+  }
+
+  const SortButton = ({ field, children }: { field: CostSort; children: string }) => (
+    <button type="button" onClick={() => changeSort(field)}>
+      {children}{sort === field ? (descending ? ' ↓' : ' ↑') : ''}
+    </button>
+  )
+
+  return (
+    <section className="dashboard-panel memory-cost-panel">
+      <header className="panel-heading">
+        <div><span className="eyebrow">LIVE LEDGER · STUDENT</span><h2>Per-memory cost</h2></div>
+        <strong>{formatInteger(costs.length)} memories measured</strong>
+      </header>
+      <p className="panel-caption">Projected monthly extrapolates the observed window to 30 days, with a one-hour minimum window.</p>
+      {!rows.length ? <EmptyPanel message="No memory costs have been recorded yet. Fill the ledger with:" /> : (
+        <div className="dashboard-table-wrap">
+          <table className="dashboard-table memory-table">
+            <thead><tr>
+              <th>tier</th><th>memory</th><th><SortButton field="tokens">tokens</SortButton></th>
+              <th><SortButton field="injections">injections</SortButton></th>
+              <th><SortButton field="cache_hit_rate">cache hit</SortButton></th>
+              <th><SortButton field="monthly_cost_usd">projected monthly</SortButton></th>
+            </tr></thead>
+            <tbody>{rows.map((row, index) => (
+              <tr key={row.memory_id} className={index === 0 && sort === 'monthly_cost_usd' && descending ? 'highest-cost' : ''}>
+                <td><span className={`table-tier tier-${row.tier}`} title={`Tier ${row.tier} ${TIER_NAMES[row.tier] ?? ''}`} />{row.tier}</td>
+                <td><div className="memory-copy"><strong>{row.memory_id}</strong>{index === 0 && sort === 'monthly_cost_usd' && descending && <em>HIGHEST COST</em>}<span>{bodies.get(row.memory_id) ?? 'Memory body unavailable.'}</span></div></td>
+                <td>{formatInteger(row.tokens)}</td><td>{formatInteger(row.injections)}</td>
+                <td><div className="table-rate"><span><i style={{ width: `${Math.max(0, Math.min(100, finite(row.cache_hit_rate) * 100))}%` }} /></span><strong>{formatPercent(finite(row.cache_hit_rate))}</strong></div></td>
+                <td className="money-cell">{formatMoney(finite(row.monthly_cost_usd), 2)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function CacheTierPanel({ rows }: { rows: CacheTierRow[] }) {
+  const lookup = new Map(rows.map((row) => [`${row.mode}-${row.tier}`, row]))
+  return (
+    <section className="dashboard-panel cache-tier-panel">
+      <header className="panel-heading"><div><span className="eyebrow">LIVE LEDGER · CACHE</span><h2>Cache hit rate by tier</h2></div></header>
+      {!rows.length ? <EmptyPanel message="No cache measurements have been recorded yet. Fill the ledger with:" /> : (
+        <>
+          <div className="chart-legend"><span className="legend-naive">Naive</span><span className="legend-tiered">Tiered</span></div>
+          <div className="tier-chart" aria-label="Cache hit rate grouped by tier and assembly mode">
+            {[0, 1, 2, 3].map((tier) => {
+              const naive = finite(lookup.get(`naive-${tier}`)?.cache_hit_rate)
+              const tiered = finite(lookup.get(`tiered-${tier}`)?.cache_hit_rate)
+              return <div className="tier-chart-group" key={tier}>
+                <div className="chart-bars"><span className="chart-bar naive-bar" style={{ height: `${naive * 100}%` }} title={`Naive ${formatPercent(naive)}`} /><span className="chart-bar tiered-bar" style={{ height: `${tiered * 100}%` }} title={`Tiered ${formatPercent(tiered)}`} /></div>
+                <div className={`chart-tier tier-${tier}`}><strong>{tier}</strong><span>{TIER_NAMES[tier]}</span></div>
+                <div className="chart-values">{formatPercent(naive)} · {formatPercent(tiered)}</div>
+              </div>
+            })}
+          </div>
+          <p className="panel-caption">Tier 3 is volatile and never cached, so zero in both modes is expected—not a bug.</p>
+        </>
+      )}
+    </section>
+  )
+}
+
+function AblationPanel({ data }: { data?: AblationResponse }) {
+  const latestByMemory = new Map<string, (NonNullable<AblationResponse['results']>)[number]>()
+  for (const row of data?.results ?? []) {
+    const current = latestByMemory.get(row.memory_id)
+    if (!current || (row.ts ?? '') > (current.ts ?? '')) latestByMemory.set(row.memory_id, row)
+  }
+  const rows = [...latestByMemory.values()].sort((left, right) => {
+    if (left.verdict === 'evict' && right.verdict !== 'evict') return -1
+    if (right.verdict === 'evict' && left.verdict !== 'evict') return 1
+    return finite(right.monthly_cost_usd) - finite(left.monthly_cost_usd)
+  })
+  const waste = rows.filter((row) => row.verdict === 'evict').reduce((sum, row) => sum + finite(row.monthly_cost_usd), 0)
+  return (
+    <section className="dashboard-panel ablation-panel">
+      <header className="panel-heading"><div><span className="eyebrow">MEASURED INFLUENCE</span><h2>{formatMoney(waste, 2)}/month in memories that change no answer.</h2></div></header>
+      {data?.provenance === 'simulated' && <div className="simulator-banner">Verdicts scored against the simulator. The harness is real; run it against Cortex for verdicts about a real model.</div>}
+      {!rows.length ? <EmptyPanel message="The ablation harness has not been run. Populate the ledger, then run: .venv/bin/python -m ablation.run --sample 25. Start with:" /> : (
+        <div className="ablation-list">{rows.map((row) => (
+          <details key={row.ablation_id} className={`ablation-row verdict-${row.verdict}`}>
+            <summary><span className="verdict-pill">{row.verdict}</span><strong>{row.memory_id}</strong><span>{formatInteger(row.tokens_saved)} tok</span><span>similarity {row.similarity == null ? '—' : row.similarity.toFixed(4)}</span><b>{formatMoney(finite(row.monthly_cost_usd), 2)}/mo</b></summary>
+            <div className="ablation-evidence">
+              {row.prompt && <p className="ablation-probe"><strong>Worst-case probe</strong> “{row.prompt}”</p>}
+              <div><article><strong>Baseline</strong><p>{row.baseline_answer || 'No answer recorded.'}</p></article><article><strong>Memory removed</strong><p>{row.ablated_answer || 'No answer recorded.'}</p></article></div>
+            </div>
+          </details>
+        ))}</div>
+      )}
+    </section>
+  )
+}
+
+function FleetPanel({ data }: { data?: FleetResponse }) {
+  const tenants = data?.tenants ?? []
+  const ranked = [...tenants].sort((a, b) => finite(b.wasted_spend_30d_usd) - finite(a.wasted_spend_30d_usd)).slice(0, 25)
+  const totals = tenants.reduce((sum, tenant) => ({
+    naive: sum.naive + finite(tenant.naive_cost_30d_usd), tiered: sum.tiered + finite(tenant.tiered_cost_30d_usd), waste: sum.waste + finite(tenant.wasted_spend_30d_usd),
+  }), { naive: 0, tiered: 0, waste: 0 })
+  return (
+    <section className="dashboard-panel fleet-panel">
+      <div className="seeded-marker">SEEDED</div>
+      <header className="panel-heading"><div><span className="eyebrow">SYNTHETIC FLEET MODEL</span><h2>Fleet opportunity</h2></div><strong>{data?.note ?? ''}</strong></header>
+      {!tenants.length ? <EmptyPanel message="No fleet seed data is available. Populate the demo data with:" /> : <>
+        <div className="fleet-tiles"><div><span>Total tenants</span><strong>{formatInteger(tenants.length)}</strong></div><div><span>30-day naive spend</span><strong>{formatMoney(totals.naive, 0)}</strong></div><div><span>30-day tiered spend</span><strong>{formatMoney(totals.tiered, 0)}</strong></div><div><span>30-day wasted spend</span><strong>{formatMoney(totals.waste, 0)}</strong></div></div>
+        <p className="panel-caption">Showing the top {ranked.length} of {tenants.length.toLocaleString('en-US')} seeded tenants by estimated wasted spend.</p>
+        <div className="dashboard-table-wrap"><table className="dashboard-table"><thead><tr><th>tenant</th><th>plan</th><th>students</th><th>memories</th><th>cache hit</th><th>eviction candidates</th><th>wasted / 30d</th></tr></thead><tbody>{ranked.map((tenant) => <tr key={tenant.tenant_id}><td><strong>{tenant.name}</strong><small>{tenant.tenant_id}</small></td><td>{tenant.plan}</td><td>{formatInteger(tenant.students)}</td><td>{formatInteger(tenant.memories_total)}</td><td>{formatPercent(finite(tenant.cache_hit_rate))}</td><td>{formatInteger(tenant.eviction_candidates)}</td><td className="money-cell">{formatMoney(finite(tenant.wasted_spend_30d_usd), 0)}</td></tr>)}</tbody></table></div>
+      </>}
+    </section>
+  )
+}
+
+function Dashboard({ userId }: { userId?: string }) {
+  const [costs, setCosts] = useState<MemoryCost[]>([])
+  const [memories, setMemories] = useState<MemoryBody[]>([])
+  const [cacheRows, setCacheRows] = useState<CacheTierRow[]>([])
+  const [ablations, setAblations] = useState<AblationResponse>()
+  const [fleet, setFleet] = useState<FleetResponse>()
+  const [loading, setLoading] = useState(true)
+  const [errors, setErrors] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!userId) return
+    let active = true
+    setLoading(true)
+    setErrors([])
+    void Promise.allSettled([getMemoryCosts(userId), getMemories(userId), getCacheByTier(), getAblations(), getFleet()]).then((results) => {
+      if (!active) return
+      const failures: string[] = []
+      const setters = [setCosts, setMemories, setCacheRows, setAblations, setFleet] as Array<(value: never) => void>
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') setters[index](result.value as never)
+        else failures.push(result.reason instanceof Error ? result.reason.message : 'Dashboard request failed.')
+      })
+      setErrors(failures)
+      setLoading(false)
+    })
+    return () => { active = false }
+  }, [userId])
+
+  return (
+    <main className="dashboard-workspace">
+      <div className="dashboard-title"><div><span className="eyebrow">COST · CACHE · INFLUENCE</span><h1>Memory economics</h1></div><span>{loading ? 'Loading measured rows…' : `Student scope · ${userId ?? 'unavailable'}`}</span></div>
+      {errors.length > 0 && <div className="dashboard-error" role="alert">Some dashboard data could not be loaded: {errors.join(' · ')}</div>}
+      <div className="dashboard-grid"><MemoryCostPanel costs={costs} memories={memories} /><CacheTierPanel rows={cacheRows} /><AblationPanel data={ablations} /><FleetPanel data={fleet} /></div>
     </main>
   )
 }
@@ -602,7 +792,7 @@ export default function App() {
       )}
 
       {view === 'dashboard' ? (
-        <DashboardPlaceholder />
+        <Dashboard userId={selectedStudent?.user_id} />
       ) : (
         <main className="tutor-workspace">
           <div className="tutor-column">

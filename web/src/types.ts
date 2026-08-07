@@ -108,3 +108,79 @@ export interface CallCost {
   mode: Mode
   cost?: number
 }
+
+export interface MemoryCost {
+  memory_id: string
+  user_id: string
+  memory_type: string
+  tier: number
+  injections: number
+  total_tokens: number
+  tokens: number
+  cost_usd: number
+  cache_hit_rate: number
+  first_seen?: string
+  last_seen?: string
+  content_hash?: string
+  stable_calls?: number
+  monthly_cost_usd: number
+}
+
+export interface MemoryBody {
+  memory_id: string
+  content: string
+  memory_type: string
+  natural_tier: number
+  tokens: number
+  updated_at?: string
+  metadata: Record<string, unknown>
+}
+
+export interface CacheTierRow {
+  mode: Mode
+  tier: number
+  injections: number
+  tokens: number
+  cache_hit_rate: number
+  cost_usd: number
+  tier_name: string
+}
+
+export interface AblationRow {
+  ablation_id: string
+  memory_id: string
+  ts?: string
+  similarity?: number | null
+  verdict: 'evict' | 'keep' | 'inconclusive'
+  tokens_saved: number
+  monthly_cost_usd: number
+  prompt?: string
+  baseline_answer?: string
+  ablated_answer?: string
+}
+
+export interface AblationResponse {
+  results: AblationRow[]
+  provenance: 'simulated' | 'live' | string
+}
+
+export interface FleetTenant {
+  tenant_id: string
+  name: string
+  plan: string
+  students: number
+  memories_total: number
+  calls_30d: number
+  avg_memories_per_call: number
+  naive_cost_30d_usd: number
+  tiered_cost_30d_usd: number
+  cache_hit_rate: number
+  eviction_candidates: number
+  wasted_spend_30d_usd: number
+}
+
+export interface FleetResponse {
+  note: string
+  tenants: FleetTenant[]
+  provenance: 'seeded' | string
+}
