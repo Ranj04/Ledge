@@ -22,7 +22,7 @@ cd web && npm install && npm run build && cd ..
 .venv/bin/python -m app
 ```
 
-**Expect:** all tests pass; the experiment prints ~46% reduction with identical answers; the
+**Expect:** all tests pass; the experiment prints ~45% reduction with identical answers; the
 ablation table flags `mem_ef6be89e` `evict` and `mem_89dad914` `keep`; <http://localhost:8000>
 serves a working tutor and a dashboard with all four panels populated.
 
@@ -98,7 +98,7 @@ Once it prints CACHING CONFIRMED, set `CORTEX_PROVIDER=real` in `.env` and resta
 
 **Expect:** the banner now reads `LIVE — real Cortex`, and a real spread rather than a near-zero
 stdev. **Write the new numbers down** — they replace every number in `DEMO.md`. The reduction
-percentage may differ from 46.5%; whatever it is, that is the number you quote.
+percentage may differ from 45.5%; whatever it is, that is the number you quote.
 
 ### Step 2b — re-measure the layout (5 min, worth it)
 
@@ -118,7 +118,7 @@ Measured against simulators, three conversations:
 |---|---|---|---|
 | `"system"` | `True` | 56.6% | 36.9% |
 | `"system"` | `False` | 56.3% | 39.2% |
-| **`"message"`** | **`True`** | **64.3%** | **46.5%** ← shipped |
+| **`"message"`** | **`True`** | **64.2%** | **45.5%** ← shipped |
 | `"message"` | `False` | 55.9% | 40.8% |
 
 Edit the two constants, run `scripts/experiment.py --runs 4` for each of the four combinations,

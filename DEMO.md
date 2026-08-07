@@ -59,7 +59,7 @@ and after the conversation so far.
 > retrieved facts reshuffle with every question. So the conversation goes in *front* of them.
 > Putting anything churny ahead of something stable poisons it."
 
-*(That change alone took us from 37% to 46%. It is in `DECISIONS.md` D17 if anyone asks.)*
+*(That change alone took us from 37% to 45%. It is in `DECISIONS.md` D17 if anyone asks.)*
 
 > "And here's the part we didn't have to invent — **those four tiers are EverOS's own memory
 > types.** Profile, semantic, skills, episodic. A good memory layer already knows how volatile
@@ -69,7 +69,7 @@ and after the conversation so far.
 
 *Point at:* the per-call cost bars.
 
-> "Same question. Same memories. Same answer — we check that, byte for byte. **Forty-six
+> "Same question. Same memories. Same answer — we check that, byte for byte. **Forty-five
 > percent cheaper.**"
 
 *Watch out:* the saving builds over a conversation, because the first turn pays to write the cache
@@ -182,7 +182,7 @@ shows it. **Do at least four turns before pointing at the percentage.**
 > conversation is append-only: nothing already said ever changes, it only grows. A top-k retrieval
 > reshuffles on every question. So by prefix stability the conversation is the *more* stable of the
 > two, and anything churny in front of it destroys it. Moving the retrieved facts behind the
-> conversation took us from 37% to 46%.
+> conversation took us from 37% to 45%.
 
 ---
 

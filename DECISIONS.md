@@ -300,3 +300,85 @@ Six-turn to eight-turn conversations, demo student, simulators, identical memory
 
 **46.5% lower cost, mean over 18 runs; range 46.1%–47.2%, stdev 0.49%.**
 Up from 36.7% before the instrument was corrected and the layout re-measured.
+
+---
+
+## Phase 7 — Making the ablation verdicts credible
+
+### D19. The simulator's composer consults every on-topic memory, not the top three
+
+The first composer quoted the three most lexically relevant memories and derived everything else in
+the reply from those three. Anything outside the top three could not influence the answer at all,
+so ablating it produced a **byte-identical** reply and a similarity of exactly 1.0000.
+
+The consequence was a headline nobody should believe: sampling 25 memories, **15 came back
+`evict`** — a 60% eviction rate, with a column of identical perfect scores. That is not a finding
+about memory, it is a fact about a top-3 lookup.
+
+Now every memory scoring at or above `INFLUENCE_THRESHOLD` shapes the reply, through a set of
+concepts drawn from the **whole** influential set rather than only the quoted ones. The behaviour
+that falls out is exactly what the harness needs and it is graded rather than binary:
+
+* remove a memory that is the **sole source** of a concept → the reply changes → `keep`
+* remove one whose content is **covered by its neighbours** → the reply does not change → `evict`
+
+That second case is the correct verdict, not a failure. A redundant memory genuinely is evictable.
+
+Measured effect: 15/25 `evict` with every score at 1.0000, to **8/25 `evict`, 3 inconclusive, and
+similarity spread across 0.55–1.00**. A distribution rather than a cliff.
+
+*Cost:* the reply is a little longer, so output tokens are a slightly larger share of each call and
+the headline moved from 46.5% to **45.5%**. Caching only affects input, so a bigger output share
+dilutes the percentage. That is the honest direction for the number to move and it was not worth
+avoiding.
+
+### D20. `INFLUENCE_THRESHOLD` is chosen for what it means, and the planted pair validates it rather than setting it
+
+`lexical_score` is `|question ∩ memory| / |question|`, so the threshold is "what fraction of the
+question's content words must a memory share before we treat it as bearing on the answer".
+**0.20 — one content word in five.**
+
+Below roughly that level the overlap is incidental: a shared "solve", "problem", "next". Counting
+that as influence makes every memory look load-bearing, which is the opposite failure to the one
+above and equally useless.
+
+*The trap this decision walks past:* it would have been easy to tune this constant until the two
+planted memories came out right, and then present the result as a finding. Measured against real
+conversation turns, the junk memory peaks at **0.125** (one word in eight; its mean is 0.036) and
+the critical memory peaks at **0.429**. The threshold sits between them with margin on both sides
+rather than balanced on a knife edge — that is what makes it a validation rather than a fit.
+
+At the event there is no threshold at all, because a real model decides what bears on the answer.
+This constant exists only because a lexical stand-in has to draw the line somewhere.
+
+### D21. Ablation probes come only from questions a student would actually ask
+
+The Phase 3 instruction told Sol to build each memory's probe set from the seeded conversation
+turns **plus two or three probes synthesised from the memory's own distinctive words**. The intent
+was to make sure every memory got tested on something it was relevant to. The instruction was
+wrong, and the bug it created was invisible in the output:
+
+```
+memory-derived probe: "during settings opened appearance previewed violet accent swatches"
+junk memory vs its own derived probe:  1.0000
+```
+
+A probe built from a memory's own words is guaranteed to be relevant to it. Every memory therefore
+looked load-bearing under its own probe, the minimum-across-probes rule rescued it, and **the
+planted junk memory came back `keep`** — the precise opposite of the claim the demo makes.
+
+A memory earns its cost by changing the answer to a question **the user actually asks**. The
+settings-panel log is genuinely relevant to a question about the settings panel, and nobody asks a
+chemistry tutor that.
+
+*The "never retrieved" rule needed splitting to match:*
+
+* `profile` and `procedural` are injected on **every** call regardless of query (D12). For those,
+  "never relevant to any realistic question" is not "untested" — it is the finding. They are paid
+  for every turn and earn nothing. Verdict `evict`.
+* `semantic` and `episodic` are retrieved conditionally. If one was never retrieved for any probe
+  it was genuinely never tested, and the verdict is `inconclusive`. We do not conclude "disposable"
+  from "never exercised".
+
+`ablation/test_planted.py` now carries an anti-circularity assertion, because this class of bug
+does not show up in the output — only in the method.

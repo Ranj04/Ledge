@@ -76,7 +76,7 @@ the student's question
 Conversation history is **append-only** — its prefix never changes, it only grows — so it caches
 better than a top-k semantic retrieval that reshuffles every question. A churning block poisons
 every stable block behind it, so tier 2 rides behind the history rather than in front of it.
-Three breakpoints of the four available. Measured: 36.9% → 46.5%. See DECISIONS.md D17.
+Three breakpoints of the four available. Measured: 36.9% → 45.5%. See DECISIONS.md D17.
 
 `naive` mode is the honest baseline — memories near the front of the prompt in relevance order, no
 breakpoints, i.e. how agents are normally built. It is production code, not a strawman. Never

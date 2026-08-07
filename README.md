@@ -52,12 +52,12 @@ Give the dashboard something to show:
 
 ```
   mode           mean     median     stdev        min        max    hit rate
-  naive    $ 0.085226 $ 0.086010 $0.001283 $ 0.083466 $ 0.086202       0.0%
-  tiered   $ 0.045592 $ 0.046303 $0.001088 $ 0.044097 $ 0.046377      64.3%
+  naive    $ 0.087843 $ 0.086877 $0.001597 $ 0.086619 $ 0.090033       0.0%
+  tiered   $ 0.047903 $ 0.047290 $0.001129 $ 0.046975 $ 0.049443      64.2%
 
-  reduction   mean 46.5%   median 46.3%   range 46.1%–47.2%   stdev 0.49%
+  reduction   mean 45.5%   median 45.4%   range 45.1%–45.9%   stdev 0.36%
   same answers in 18/18 runs
-  prompt size   naive 24,260 tok   tiered 24,372 tok   (same content, different layout)
+  prompt size   naive 24,498 tok   tiered 24,610 tok   (same content, different layout)
 ```
 
 ---
@@ -124,7 +124,7 @@ Order is by **measured prefix stability**, not tier number: `0 → 1 → convers
 Conversation history is append-only, so its prefix never changes; a top-k semantic retrieval
 reshuffles every question. A churning block poisons every stable block behind it, so tier 2 rides
 *behind* the history. Three breakpoints of the four available. That one change moved the result
-from 36.9% to 46.5% — the working is in `DECISIONS.md` D17.
+from 36.9% to 45.5% — the working is in `DECISIONS.md` D17.
 
 ## Tests
 

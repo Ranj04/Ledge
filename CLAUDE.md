@@ -118,7 +118,7 @@ Conversation history is **append-only** — its prefix never changes, it only gr
 better than a top-k semantic retrieval that reshuffles every question. A churning block poisons
 every stable block behind it, so tier 2 rides behind the history rather than in front of it.
 Three breakpoints of the four available; the fourth would have to sit on churning content.
-Measured: 36.9% -> 46.5% cost reduction. Full working in DECISIONS.md D17.
+Measured: 36.9% -> 45.5% cost reduction. Full working in DECISIONS.md D17.
 
 **Tier drift:** if a tier-1 memory's content changes, the cache for tiers 1–3 invalidates on the
 next call. Promote a memory to a slower tier only after it has been content-stable for

@@ -37,8 +37,27 @@ from app.cortex.cache_sim import PromptCacheSimulator, flatten_prompt
 from app.cortex.tokens import count_tokens
 from app.everos.mock_client import lexical_score, tokenize
 
-RELEVANCE_THRESHOLD = 0.18
-MAX_REFERENCED = 3
+# A memory must share at least a fifth of the question's content words before we
+# treat it as bearing on the answer. `lexical_score` is |question ∩ memory| /
+# |question|, so this is "one content word in five".
+#
+# Chosen for what it means, not for what it makes the planted memories do: below
+# roughly this level the overlap is incidental — a shared "solve" or "problem" —
+# and calling that influence would make every memory look load-bearing. The
+# planted pair validates the choice rather than setting it: against real
+# conversation turns the junk memory peaks at 0.125 (one word in eight, and its
+# mean is 0.036) while the critical memory peaks at 0.429. The separation has
+# margin in both directions; it is not a knife-edge fit.
+#
+# At the event there is no threshold at all — a real model decides what bears on
+# the answer. This constant exists only because a lexical stand-in has to draw
+# the line somewhere. See DECISIONS.md D10 and D19.
+INFLUENCE_THRESHOLD = 0.20
+# How many memories are quoted back verbatim. The rest still shape the reply —
+# see `_concepts` — they are just not recited.
+MAX_QUOTED = 3
+# How many distinct concepts the reply commits to mentioning.
+MAX_CONCEPTS = 6
 
 
 class MockCortexClient:
@@ -208,25 +227,54 @@ def _pick(options: tuple[str, ...], seed: str) -> str:
     return options[digest[0] % len(options)]
 
 
+def _concepts(influential: list[str]) -> list[str]:
+    """The distinctive terms the on-topic memories collectively supply.
+
+    This is what stops the composer from being a top-3 lookup. A real model
+    reading a hundred memories is shaped by all the relevant ones, not only the
+    three it happens to quote — so the reply commits to a handful of concepts
+    drawn from the *whole* influential set.
+
+    The graded behaviour that falls out of this is exactly what the ablation
+    harness needs. Remove a memory that is the sole source of a concept and the
+    reply changes. Remove one whose content is covered by its neighbours and it
+    does not — which is the correct verdict, because a redundant memory really
+    is evictable.
+    """
+    terms: set[str] = set()
+    for memory in influential:
+        terms |= {w for w in tokenize(memory) if len(w) > 5}
+    return sorted(terms)[:MAX_CONCEPTS]
+
+
 def _compose(query: str, memories: list[str]) -> str:
     """Deterministic in (query, set(memories)).  Order-independent by
     construction: `memories` arrives sorted and is filtered, not indexed."""
-    relevant = sorted(
+    scored = sorted(
         ((lexical_score(query, m), m) for m in memories),
         key=lambda pair: (-pair[0], pair[1]),
     )
-    relevant = [m for score, m in relevant if score >= RELEVANCE_THRESHOLD][:MAX_REFERENCED]
+    # Everything on-topic influences the answer; only the strongest are quoted.
+    influential = [m for score, m in scored if score >= INFLUENCE_THRESHOLD]
+    quoted = influential[:MAX_QUOTED]
+    concepts = _concepts(influential)
 
-    seed = query + "\x1f" + "\x1f".join(relevant)
+    seed = query + "\x1f" + "\x1f".join(quoted) + "\x1e" + ",".join(concepts)
     lines = [_pick(OPENERS, seed)]
 
-    if relevant:
+    if quoted:
+        lines.append("")
+        lines.append("Bearing in mind what I know about how you work: " + quoted[0])
+        for extra in quoted[1:]:
+            lines.append("Also relevant here: " + extra)
+
+    if concepts:
         lines.append("")
         lines.append(
-            "Bearing in mind what I know about how you work: " + relevant[0]
+            "I'm holding the rest of what I know about your work on "
+            + ", ".join(concepts)
+            + " while we do this."
         )
-        for extra in relevant[1:]:
-            lines.append("Also relevant here: " + extra)
 
     topic = _topic(query)
     lines.append("")
