@@ -32,50 +32,45 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from urllib.parse import urlparse
 
 from app.config import get_settings
 from app.contracts import Memory, MemoryType
+from app.memory_types import ALWAYS_INJECTED, NATURAL_TIER, normalise
 
-# EverOS names its memory surfaces slightly differently from our contract.
-# VERIFY-AT-EVENT: confirm the exact strings returned in the `type`/`memory_type`
-# field of a search result and extend this map if any are missing.
-TYPE_ALIASES: dict[str, MemoryType] = {
-    "profile": "profile",
-    "user_profile": "profile",
-    "semantic": "semantic",
-    "fact": "semantic",
-    "knowledge": "semantic",
-    "procedural": "procedural",
-    "skill": "procedural",
-    "agent_skill": "procedural",
-    "agent skill": "procedural",
-    "episodic": "episodic",
-    "episode": "episodic",
-    "agent_case": "episodic",
-    "agent case": "episodic",
-}
-
-
-# How long the profile/procedural set is reused before re-fetching. These
+# How long the always-injected set (Skills, Profiles) is reused before re-fetching. These
 # change on a scale of weeks; a minute of staleness is invisible and keeps
 # tier 0/1 byte-stable within a conversation.
 STABLE_CACHE_TTL = 60.0
 
 
+def _is_local(base_url: str) -> bool:
+    host = urlparse(base_url).hostname or ""
+    return host in ("localhost", "127.0.0.1", "::1", "everos", "host.docker.internal")
+
+
 class RealEverOSClient:
     def __init__(self) -> None:
         s = get_settings()
-        if not s.everos_api_key:
-            raise RuntimeError("EVEROS_API_KEY is not set — cannot use EVEROS_PROVIDER=real")
         self.settings = s
-        self.client = httpx.AsyncClient(
-            base_url=s.everos_base_url.rstrip("/"),
-            headers={
-                "Authorization": f"Bearer {s.everos_api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=30.0,
-        )
+        base = s.everos_base_url.rstrip("/")
+
+        # Cloud and self-hosted expose the same HTTP API, so this is one client
+        # and one env var, not two clients. Self-hosted runs unauthenticated on
+        # a private network, so the key is required only when we are talking to
+        # a remote host — demanding one locally would block the whole
+        # self-hosted path for no benefit.
+        headers = {"Content-Type": "application/json"}
+        if s.everos_api_key:
+            headers["Authorization"] = f"Bearer {s.everos_api_key}"
+        elif not _is_local(base):
+            raise RuntimeError(
+                f"EVEROS_API_KEY is not set and EVEROS_BASE_URL points at {base!r}, "
+                "which is not local. Either set the key (cloud) or point the base "
+                "URL at a self-hosted instance."
+            )
+
+        self.client = httpx.AsyncClient(base_url=base, headers=headers, timeout=30.0)
         self._stable_cache: dict[str, tuple[float, list[Memory]]] = {}
 
     def _scope(self) -> dict[str, str]:
@@ -93,7 +88,7 @@ class RealEverOSClient:
         return [_parse_memory(item, user_id, self._scope()) for item in _items(response.json())]
 
     async def _stable_set(self, user_id: str, now: float) -> list[Memory]:
-        """Every profile and procedural memory, cached briefly.
+        """Every always-injected memory (Skills, Profiles), cached briefly.
 
         These are injected in full on every turn (DECISIONS.md D12) and they
         change on a scale of weeks, so re-fetching them each turn is a network
@@ -113,12 +108,12 @@ class RealEverOSClient:
                 "user_id": user_id,
                 "top_k": 500,
                 "method": "keyword",
-                "memory_types": ["profile", "procedural", "agent_skill", "user_profile"],
+                "memory_types": sorted(ALWAYS_INJECTED | {"skills", "profiles"}),
                 **self._scope(),
             },
             user_id,
         )
-        stable = [m for m in memories if m.memory_type in ("profile", "procedural")]
+        stable = [m for m in memories if m.memory_type in ALWAYS_INJECTED]
         self._stable_cache[user_id] = (now, stable)
         return stable
 
@@ -160,7 +155,7 @@ class RealEverOSClient:
         volatile = [
             m
             for m in retrieved
-            if m.memory_type in ("semantic", "episodic") and m.memory_id not in seen
+            if m.memory_type not in ALWAYS_INJECTED and m.memory_id not in seen
         ]
         return [*stable, *volatile]
 
@@ -233,6 +228,17 @@ class RealEverOSClient:
             "/api/v2/memory/flush", json={"session_id": session_id, **self._scope()}
         )
 
+    async def health(self) -> dict[str, Any]:
+        """Self-hosted EverOS exposes GET /health -> {"status": "ok"}.
+
+        Used by EVENT_DAY step 3 to separate "EverOS is not running" from
+        "EverOS is running and our request is wrong", which are very different
+        problems to be debugging under time pressure.
+        """
+        response = await self.client.get("/health")
+        response.raise_for_status()
+        return response.json()
+
     async def aclose(self) -> None:
         await self.client.aclose()
 
@@ -263,12 +269,13 @@ def _items(payload: Any) -> list[dict[str, Any]]:
 
 
 def _parse_memory(item: dict[str, Any], user_id: str, scope: dict[str, str]) -> Memory:
-    raw_type = str(
-        item.get("memory_type") or item.get("type") or item.get("surface") or ""
-    ).strip().lower()
-    # An unrecognised type becomes episodic, which is tier 3: full price, but it
-    # cannot invalidate a cached prefix. Failing safe means failing volatile.
-    memory_type: MemoryType = TYPE_ALIASES.get(raw_type, "episodic")
+    # strict=False: this is untrusted API data and a mapping gap must not take
+    # down the demo. It degrades to tier 3 — full price for itself, but it
+    # cannot invalidate a cached prefix — and records the string so it shows up
+    # in /api/status rather than vanishing. See app/memory_types.py.
+    memory_type: MemoryType = normalise(
+        item.get("memory_type") or item.get("type") or item.get("surface"), strict=False
+    )
 
     content = str(
         item.get("content") or item.get("text") or item.get("memory") or item.get("summary") or ""

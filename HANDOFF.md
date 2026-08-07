@@ -67,6 +67,30 @@ The single best catch was Sol's: `/api/inspect` shared mutable `MemoryState` wit
 registry, so repeated inspector calls could promote a memory into a cached tier **with no model
 call at all** — a dry run silently changing the measurement it previews.
 
+## Opportunities noted, deliberately not built today
+
+### O1 — Self-hosted EverOS makes volatility detection a file hash
+
+`TierRegistry` currently detects that a memory changed by hashing the **content string we were
+handed** (`Memory.content_hash()`), counting stable observations across calls. That works against
+any provider and it is what ships today.
+
+Self-hosted EverOS stores memories as **Markdown files on disk** (`~/.everos`, with SQLite and
+LanceDB indexes beside them). Once it is running locally, volatility stops being an inference and
+becomes an observation: hash the file, or just read its mtime. Concretely that would give us
+
+* **drift detection without a call** — today a memory has to be retrieved before we can notice it
+  changed, so the first call after an edit always pays the invalidation;
+* **a real promotion signal** — "unchanged on disk for six days" is far stronger evidence than
+  "unchanged across three retrievals inside a five-minute window", which is what
+  `PRIOR_STABILITY_WINDOW` is currently approximating;
+* **cheap tier auditing** — walk the directory, hash everything, and see which memories actually
+  move, rather than trusting the type→tier mapping.
+
+**Not building it today.** The current path works, it is provider-independent, and swapping the
+change detector on event morning would put the tier logic — which the headline number depends on —
+back in play hours before the demo. Worth doing first thing after the event.
+
 ## Open requests
 
 ### R1 → Sol (`web/`): the hero cost number depends entirely on `requestAnimationFrame`

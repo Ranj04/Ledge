@@ -208,6 +208,17 @@ textarea:focus-visible {
   color: var(--error);
 }
 
+.unknown-types-chip {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid #8c642c;
+  border-radius: 3px;
+  background: #312515;
+  color: #ffc870;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .chip-dot {
   width: 8px;
   height: 8px;
@@ -1134,7 +1145,7 @@ textarea:focus-visible {
   table-layout: fixed;
 }
 
-.memory-table th:nth-child(1) { width: 62px; }
+.memory-table th:nth-child(1) { width: 112px; }
 .memory-table th:nth-child(2) { width: auto; }
 .memory-table th:nth-child(3) { width: 70px; }
 .memory-table th:nth-child(4) { width: 88px; }
@@ -1154,6 +1165,15 @@ textarea:focus-visible {
   margin-right: 8px;
   background: currentColor;
   vertical-align: middle;
+}
+
+.table-tier-copy {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.table-tier-copy small {
+  font-size: 11px;
 }
 
 .memory-copy {

@@ -12,6 +12,8 @@ from typing import Any
 
 import tiktoken
 
+from app.memory_types import tier_for
+
 
 RNG_SEED = 20260806
 GENERATED_AT = "2026-08-06T00:00:00Z"
@@ -20,7 +22,6 @@ OUTPUT_DIR = ROOT / "data" / "seed"
 AGENT_ID = "memoryledger-tutor"
 APP_ID = "memoryledger"
 PROJECT_ID = "hackathon"
-TYPE_TO_TIER = {"procedural": 0, "profile": 1, "semantic": 2, "episodic": 3}
 
 
 def _session_times(offset_minutes: int = 0) -> list[datetime]:
@@ -58,8 +59,8 @@ def _memory(
     metadata: dict[str, Any],
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    if (memory_type == "episodic") != (session_id is not None):
-        raise ValueError("session_id must be set if and only if memory_type is episodic")
+    if (memory_type == "episode") != (session_id is not None):
+        raise ValueError("session_id must be set if and only if memory_type is episode")
     return {
         "memory_id": _memory_id(user_id, memory_type, content),
         "memory_type": memory_type,
@@ -76,7 +77,7 @@ def _memory(
     }
 
 
-MAYA_PROCEDURAL = [
+MAYA_SKILLS = [
     "When Maya asks for an answer directly, give one targeted hint first and ask her to attempt a step before revealing the solution.",
     "Start chemistry explanations with a particle-level picture, then connect it to the equation and only afterward introduce the calculation.",
     "Ask Maya to state units on every numeric line; if a unit disappears, pause and have her repair the dimensional-analysis chain.",
@@ -158,7 +159,7 @@ MAYA_PROFILE = [
     "She becomes discouraged by a page filled with red corrections and prefers revisions grouped into one recurring pattern at a time.",
 ]
 
-MAYA_SEMANTIC = [
+MAYA_FACTS = [
     "Maya reliably balances ordinary chemical equations when all formulas are supplied, including equations with polyatomic ions that remain intact.",
     "She sometimes changes a chemical subscript while balancing, confusing conservation by coefficients with alteration of a compound's identity.",
     "Maya can convert grams to moles using molar mass, but she occasionally inverts the conversion factor when the requested unit is not written beside the number.",
@@ -194,7 +195,7 @@ MAYA_SEMANTIC = [
 ]
 
 
-LIAM_PROCEDURAL = [
+LIAM_SKILLS = [
     "Let Liam sketch or label a diagram before introducing a geometry formula, and ask what each marked quantity represents.",
     "When Liam gives a biology vocabulary term, ask for a mechanism or example so recall is not mistaken for understanding.",
     "Use soccer-field or sports-training contexts sparingly when they clarify scale, rate, or spatial relationships.",
@@ -285,7 +286,7 @@ LIAM_PROFILE = [
     "Liam's first-quarter Geometry portfolio is due 2026-10-16 and must include two revised proofs, one coordinate-geometry artifact, and a reflection that names how the evidence improved. His Honors Biology capstone proposal is due the following week; he plans to investigate pulse recovery after different soccer drills, and Mr. Kim requires a controlled variable, a graph-ready data table, and a safety note. Liam wants tutoring checkpoints for both projects because long deadlines otherwise disappear behind nightly homework.",
 ]
 
-LIAM_SEMANTIC = [
+LIAM_FACTS = [
     "Liam distinguishes points, lines, rays, and segments accurately and uses standard notation when reminded.",
     "He can apply the segment-addition postulate but sometimes adds every visible label rather than identifying adjacent parts of the requested whole.",
     "Liam recognizes vertical angles as congruent and linear pairs as supplementary from clean diagrams.",
@@ -317,7 +318,7 @@ LIAM_SEMANTIC = [
 ]
 
 
-PRIYA_PROCEDURAL = [
+PRIYA_SKILLS = [
     "Give Priya a conceptual prediction before each calculus derivation, then compare the formal result with that prediction.",
     "For physics problems, require a labeled free-body diagram and chosen positive direction before any component equations.",
     "When Priya reaches a correct answer quickly, probe one assumption or limiting case instead of adding routine repetition.",
@@ -408,7 +409,7 @@ PRIYA_PROFILE = [
     "Priya's senior research seminar begins in September, and she plans to model a small orbital-transfer problem if her adviser approves it. The proposal must explain assumptions for a nontechnical audience, which she expects to find harder than the mathematics.",
 ]
 
-PRIYA_SEMANTIC = [
+PRIYA_FACTS = [
     "Priya evaluates polynomial, rational, and basic trigonometric limits accurately using direct substitution when continuity permits it.",
     "She recognizes indeterminate forms but occasionally treats 0/0 as the numerical answer rather than a signal to transform the expression.",
     "Priya factors and rationalizes effectively to resolve algebraic limit forms.",
@@ -437,6 +438,73 @@ PRIYA_SEMANTIC = [
     "She is learning that static friction adjusts up to a maximum and is not always equal to μsN.",
     "Priya can derive constant-acceleration relations from velocity-time graphs and interpret area as displacement.",
     "She is shaky choosing a system boundary for connected-block tension problems, especially when solving for internal tension after total acceleration.",
+]
+
+
+MAYA_FORESIGHTS = [
+    "On the 2026-08-14 stoichiometry test, Maya is likely to choose a limiting reagent by comparing raw mole amounts when the coefficients are unequal unless she writes the product-from-each-reactant table first.",
+    "Maya is likely to lose one setup point on a solution-stoichiometry item that gives volume in milliliters because she will substitute before converting to liters; a separate unit line should prevent it.",
+    "If the stoichiometry test combines percent yield with a limiting-reagent calculation, Maya will probably find the theoretical yield correctly but invert the final ratio unless she labels actual and theoretical values before dividing.",
+    "On the 2026-08-12 Algebra II quiz, Maya is likely to read f(g(2)) as a single substitution task successfully, but a composition written entirely in symbols may still trigger the multiplication misconception.",
+    "Maya's next chemistry lab conclusion is likely to include correct calculations but omit the sentence connecting the numerical result to the claim unless she uses Dr. Ruiz's four-part checklist.",
+    "During a timed mixed set, Maya will probably maintain accuracy through the first two unit conversions and then drop a unit on the third line; her error rate should fall if every numeric line is checked before moving on.",
+    "Maya is likely to complete more independent chemistry practice when the examples use water treatment or air quality than when the same calculations use generic industrial reactions; completion across the next two sets will test this.",
+    "In the week before her 2026-09-12 AP Chemistry exam, Maya is likely to overfill Monday and Wednesday plans unless each task is capped at 25 minutes and scheduled backward from the exam date.",
+]
+
+MAYA_CASES = [
+    "Teaching limiting reagents by calculating the same product from both reactants worked after comparing raw moles had failed twice; reuse the two-row product table before introducing shortcuts.",
+    "A particle diagram followed by an atom-count check corrected Maya's attempt to change a subscript while balancing; the equation-only explanation had not changed the error.",
+    "Putting the milliliter-to-liter conversion on its own line eliminated Maya's solution-stoichiometry unit error in the exit problem; keep that line visible before applying molarity.",
+    "Parenthesizing all three quadratic coefficients prevented Maya from losing the outer negative on −b, and she solved the parallel item without a hint; reuse the substitution template for negative coefficients.",
+    "Limiting an explanation to three steps and returning control kept Maya working from her phone, while a full worked solution led her to stop producing intermediate lines.",
+    "A changed-context transfer problem exposed Maya's catalyst-versus-equilibrium misconception after she had answered a familiar wording correctly; use transfer checks before marking chemistry concepts mastered.",
+    "Reviewing Maya's personal error checklist before a mixed chemistry set produced two self-corrections without tutor prompts; this was more effective than a broad content recap.",
+    "Naming the exact line where Maya's unit chain broke kept her engaged and led to a repair, whereas restarting the whole problem after an earlier error had caused her to disengage.",
+]
+
+LIAM_FORESIGHTS = [
+    "On the 2026-08-17 geometry readiness quiz, Liam is likely to identify the correct congruence relationship but omit a theorem name in the written justification unless he rehearses claim-and-reason pairs.",
+    "A rotated triangle diagram is likely to make Liam propose SSA even after he succeeds on an upright version; marking supported sides and angles before naming a test should prevent the error.",
+    "On the 2026-08-21 biology test, Liam will probably recall membrane-transport vocabulary but lose explanation points if he does not state concentration direction and energy use in complete sentences.",
+    "After Tuesday or Thursday soccer practice, Liam is likely to leave a formal proof blank for longer than two minutes, while a labeled-diagram warm-up should get him writing within the first minute.",
+    "In the next Friday biology data warm-up, Liam is likely to describe correlation accurately but make an unsupported causal claim unless he identifies the comparison group before writing.",
+    "Liam is likely to reverse a slope sign in a coordinate proof when he subtracts x- and y-coordinates in different point orders; writing both differences in one table should eliminate it.",
+    "A cell-transport question with an unfamiliar organism is likely to reveal whether Liam can transfer the mechanism beyond memorized examples; he should succeed if he draws water or solute arrows first.",
+    "Liam will probably finish more of the next proof assignment when the first row is supplied as a skeleton, but he may copy the format without understanding unless the final reason is removed for him to supply.",
+]
+
+LIAM_CASES = [
+    "Starting a congruence proof with diagram marks and a claim-and-reason table got Liam past a blank page; asking for a prose proof first had produced no written attempt.",
+    "A deliberately rotated diagram showed that Liam had been relying on appearance, and redrawing it out of scale shifted him to using markings and theorem hypotheses.",
+    "For osmosis, drawing water arrows before naming the cell outcome corrected Liam's swelling prediction; vocabulary review alone had left the direction error unchanged.",
+    "Separating carbon atoms and energy into two rows helped Liam explain respiration without treating energy as matter, and he transferred the distinction to photosynthesis.",
+    "A ten-second target check after a rushed geometry error restored Liam's accuracy on the next item; adding a longer correction caused him to tune out after soccer practice.",
+    "Having Liam point to the control group before explaining a biology graph removed an unsupported causal claim in his revision; reuse that evidence-first sequence for data questions.",
+    "Testing a pedigree with one decisive parent-child relationship ruled out the wrong inheritance model quickly, while filling every genotype first created avoidable contradictions.",
+    "Letting Liam explain a proof aloud and then convert each sentence into one table row produced a complete justification; presenting a finished model had led him to copy theorem names without matching evidence.",
+]
+
+PRIYA_FORESIGHTS = [
+    "On the 2026-08-20 Calculus BC diagnostic, Priya is likely to solve routine chain-rule derivatives but omit the innermost factor on a nested inverse-trigonometric exponential unless she annotates the layers first.",
+    "Priya is likely to report a zero of the second derivative as an inflection point on the diagnostic without checking both neighboring intervals; a sign chart should prevent the false positive.",
+    "In the 2026-08-18 mechanics lab, Priya will probably produce a correct linearized graph but under-explain why its slope represents the model parameter unless she writes the predicted equation before fitting.",
+    "A connected-block problem that asks for tension after acceleration is likely to make Priya keep an internal force in the whole-system equation; drawing the system boundary should separate the two stages.",
+    "Priya is likely to set static friction equal to μsN too early when the applied force remains below the maximum; solving equilibrium before checking the bound should correct the result.",
+    "On a mixed mechanics free response, Priya will probably obtain the correct magnitude but lose a communication point if she does not interpret the sign and include units in the final sentence.",
+    "When a related-rates prompt supplies numerical values early, Priya is likely to substitute them before differentiating unless changing quantities are labeled as functions of time.",
+    "Priya's September orbital-transfer proposal is likely to be mathematically sound but too assumption-dense for a nontechnical reader; a one-sentence physical meaning after each equation should improve reviewer comprehension.",
+]
+
+PRIYA_CASES = [
+    "Annotating outer, middle, and inner layers before differentiating eliminated Priya's missing chain-rule factor on a nested exponential-trigonometric item; direct symbolic expansion had obscured the omission.",
+    "Requiring a concavity sign chart prevented Priya from declaring every second-derivative zero an inflection point, and she rejected a non-changing candidate independently on the next problem.",
+    "Writing the theoretical linear form before plotting mechanics data helped Priya connect slope to the predicted parameter; fitting first had produced a correct graph with an unsupported interpretation.",
+    "Drawing one boundary around both connected blocks removed internal tension from Priya's acceleration equation, then redrawing a single-block boundary recovered tension cleanly.",
+    "Solving for the friction required by equilibrium before comparing it with μsN corrected Priya's habit of assigning maximum static friction immediately; the inequality check transferred to a ramp problem.",
+    "Keeping velocity height and signed area in separate annotations corrected Priya's displacement reading from a graph; a formula-first approach had mixed the two quantities.",
+    "Delaying numerical substitution until after differentiating preserved the rate relationship in a circular-ripple problem and allowed Priya to explain which instant the values described.",
+    "Adding an assumptions-units-sign checklist to the final two minutes of a mixed free response recovered missing communication points without changing Priya's calculations; reuse it for timed sets.",
 ]
 
 
@@ -519,7 +587,7 @@ PRIYA_TOPICS = [
 ]
 
 
-def _episodic_memories(
+def _episode_memories(
     *,
     rng: random.Random,
     user_id: str,
@@ -575,7 +643,7 @@ def _episodic_memories(
                 _memory(
                     rng=rng,
                     user_id=user_id,
-                    memory_type="episodic",
+                    memory_type="episode",
                     content=content,
                     timestamp=session_time + timedelta(minutes=event_index * 8),
                     session_id=session_id,
@@ -592,9 +660,11 @@ def _student(
     display_name: str,
     grade_level: str,
     subjects: list[str],
-    procedural: list[str],
+    skills: list[str],
     profile: list[str],
-    semantic: list[str],
+    facts: list[str],
+    foresights: list[str],
+    cases: list[str],
     topics: list[tuple[str, str, str, str]],
     offset_minutes: int,
 ) -> dict[str, Any]:
@@ -604,13 +674,13 @@ def _student(
     stable_sessions = [session for session in sessions if session <= stable_cutoff]
     memories: list[dict[str, Any]] = []
     for memory_type, contents in (
-        ("procedural", procedural),
+        ("skill", skills),
         ("profile", profile),
-        ("semantic", semantic),
+        ("fact", facts),
     ):
         for index, content in enumerate(contents):
             timestamp = stable_sessions[
-                (index * 3 + TYPE_TO_TIER[memory_type]) % len(stable_sessions)
+                (index * 3 + tier_for(memory_type)) % len(stable_sessions)
             ]
             memories.append(
                 _memory(
@@ -621,12 +691,12 @@ def _student(
                     timestamp=timestamp,
                     metadata={
                         "week": ((timestamp.date() - date(2026, 6, 15)).days // 7) + 1,
-                        "topic": "tutor behavior" if memory_type == "procedural" else subjects[index % len(subjects)],
+                        "topic": "tutor behavior" if memory_type == "skill" else subjects[index % len(subjects)],
                     },
                 )
             )
     memories.extend(
-        _episodic_memories(
+        _episode_memories(
             rng=rng,
             user_id=user_id,
             first_name=display_name.split()[0],
@@ -634,6 +704,23 @@ def _student(
             offset_minutes=offset_minutes,
         )
     )
+    for memory_type, contents in (("foresight", foresights), ("case", cases)):
+        for index, content in enumerate(contents):
+            timestamp = sessions[-1] + timedelta(minutes=30 + index * 3 + (0 if memory_type == "foresight" else 1))
+            memories.append(
+                _memory(
+                    rng=rng,
+                    user_id=user_id,
+                    memory_type=memory_type,
+                    content=content,
+                    timestamp=timestamp,
+                    metadata={
+                        "week": 8,
+                        "topic": subjects[index % len(subjects)],
+                        "horizon": "next assessment" if memory_type == "foresight" else "reuse candidate",
+                    },
+                )
+            )
     return {
         "user_id": user_id,
         "display_name": display_name,
@@ -853,7 +940,7 @@ def _token_counts(students: list[dict[str, Any]]) -> dict[str, dict[int, int]]:
         counts: defaultdict[int, int] = defaultdict(int)
         for memory in student["memories"]:
             rendered = f"- {memory['content']}\n"
-            counts[TYPE_TO_TIER[memory["memory_type"]]] += len(encoding.encode(rendered))
+            counts[tier_for(memory["memory_type"])] += len(encoding.encode(rendered))
         result[student["user_id"]] = dict(sorted(counts.items()))
     return result
 
@@ -871,9 +958,11 @@ def main() -> None:
             display_name="Maya Chen",
             grade_level="11th grade",
             subjects=["AP Chemistry", "Algebra II"],
-            procedural=MAYA_PROCEDURAL,
+            skills=MAYA_SKILLS,
             profile=MAYA_PROFILE,
-            semantic=MAYA_SEMANTIC,
+            facts=MAYA_FACTS,
+            foresights=MAYA_FORESIGHTS,
+            cases=MAYA_CASES,
             topics=MAYA_TOPICS,
             offset_minutes=0,
         ),
@@ -883,9 +972,11 @@ def main() -> None:
             display_name="Liam Ortiz",
             grade_level="10th grade",
             subjects=["Geometry", "Honors Biology"],
-            procedural=LIAM_PROCEDURAL,
+            skills=LIAM_SKILLS,
             profile=LIAM_PROFILE,
-            semantic=LIAM_SEMANTIC,
+            facts=LIAM_FACTS,
+            foresights=LIAM_FORESIGHTS,
+            cases=LIAM_CASES,
             topics=LIAM_TOPICS,
             offset_minutes=11,
         ),
@@ -895,9 +986,11 @@ def main() -> None:
             display_name="Priya Shah",
             grade_level="12th grade",
             subjects=["AP Calculus BC", "AP Physics C: Mechanics"],
-            procedural=PRIYA_PROCEDURAL,
+            skills=PRIYA_SKILLS,
             profile=PRIYA_PROFILE,
-            semantic=PRIYA_SEMANTIC,
+            facts=PRIYA_FACTS,
+            foresights=PRIYA_FORESIGHTS,
+            cases=PRIYA_CASES,
             topics=PRIYA_TOPICS,
             offset_minutes=23,
         ),

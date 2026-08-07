@@ -174,7 +174,10 @@ def test_the_memory_registry_is_populated_with_the_right_tiers(client):
     conn.close()
 
     tiers = {r["memory_type"]: r["tier"] for r in rows}
-    assert tiers == {"procedural": 0, "profile": 1, "semantic": 2, "episodic": 3}
+    assert tiers == {
+        "skill": 0, "profile": 1, "fact": 2,
+        "episode": 3, "foresight": 3, "case": 3,
+    }, "every EverOS type should reach the registry at its documented tier"
     assert sum(r["n"] for r in rows) > 50
 
 

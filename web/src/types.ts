@@ -1,5 +1,19 @@
 export type Mode = 'naive' | 'tiered'
 
+export interface MemoryTypeSpec {
+  tier: number
+  side: 'agent' | 'user'
+  label: string
+  always_injected: boolean
+}
+
+export interface TierSpec {
+  name: string
+  source: string
+  cacheable: boolean
+  types: string[]
+}
+
 export interface Status {
   providers: {
     cortex: string
@@ -19,6 +33,9 @@ export interface Status {
     max_breakpoints: number
     cache_ttl_seconds: number
   }
+  types: Record<string, MemoryTypeSpec>
+  tiers: Record<string, TierSpec>
+  unknown_types_seen: string[]
 }
 
 export interface Student {

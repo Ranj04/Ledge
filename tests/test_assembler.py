@@ -40,14 +40,14 @@ def mem(mid, mtype, content, score=0.5, updated=OLD) -> Memory:
 @pytest.fixture
 def memories() -> list[Memory]:
     return [
-        mem("mem_p1", "procedural", "Give a hint before the answer.", 0.30),
-        mem("mem_p2", "procedural", "Ask for units on every numeric line.", 0.20),
+        mem("mem_p1", "skill", "Give a hint before the answer.", 0.30),
+        mem("mem_p2", "skill", "Ask for units on every numeric line.", 0.20),
         mem("mem_f1", "profile", "Maya is an 11th grader in AP Chemistry.", 0.90),
         mem("mem_f2", "profile", "Her exam is on 2026-09-12.", 0.40),
-        mem("mem_s1", "semantic", "She can balance equations in acidic solution.", 0.80),
-        mem("mem_s2", "semantic", "She confuses coefficients with subscripts.", 0.60),
-        mem("mem_e1", "episodic", "On 2026-08-01 she scored 4/6 on limiting reagents.", 0.70),
-        mem("mem_e2", "episodic", "On 2026-07-28 she asked about molar mass.", 0.10),
+        mem("mem_s1", "fact", "She can balance equations in acidic solution.", 0.80),
+        mem("mem_s2", "fact", "She confuses coefficients with subscripts.", 0.60),
+        mem("mem_e1", "episode", "On 2026-08-01 she scored 4/6 on limiting reagents.", 0.70),
+        mem("mem_e2", "episode", "On 2026-07-28 she asked about molar mass.", 0.10),
     ]
 
 
@@ -187,7 +187,7 @@ def test_a_churning_tier_in_front_of_a_stable_one_poisons_it(memories):
 
     churned = copy.deepcopy(memories)
     for m in churned:
-        if m.memory_type == "semantic":
+        if m.memory_type == "fact":
             m.content += " (revised)"
 
     assert history_prefix(memories, "message") == history_prefix(churned, "message"), (

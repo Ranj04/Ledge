@@ -10,11 +10,12 @@ from pathlib import Path
 import tiktoken
 
 from app.contracts import Memory
+from app.memory_types import normalise, tier_for
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TYPE_TO_TIER = {"procedural": 0, "profile": 1, "semantic": 2, "episodic": 3}
-STABLE_TYPES = {"procedural", "profile", "semantic"}
+STABLE_TYPES = {"skill", "profile", "fact"}
+EXPECTED_TYPES = {"skill", "profile", "fact", "episode", "foresight", "case"}
 STABLE_CUTOFF = datetime(2026, 8, 4, tzinfo=timezone.utc)
 EXPECTED_PLANTED = {"junk": ["mem_ef6be89e"], "critical": ["mem_89dad914"]}
 
@@ -29,11 +30,16 @@ def main() -> None:
         token_counts: defaultdict[int, int] = defaultdict(int)
         ids: set[str] = set()
         for raw in student["memories"]:
+            canonical_type = normalise(raw["memory_type"])
+            if raw["memory_type"] != canonical_type:
+                raise AssertionError(
+                    f"non-canonical memory type {raw['memory_type']!r} for {raw['memory_id']}"
+                )
             memory = Memory(**raw)
             if memory.memory_id in ids:
                 raise AssertionError(f"duplicate memory_id: {memory.memory_id}")
             ids.add(memory.memory_id)
-            if (memory.memory_type == "episodic") != (memory.session_id is not None):
+            if (memory.memory_type == "episode") != (memory.session_id is not None):
                 raise AssertionError(f"invalid session_id for {memory.memory_id}")
             if not 0.0 <= memory.score <= 1.0:
                 raise AssertionError(f"score out of range for {memory.memory_id}")
@@ -44,8 +50,17 @@ def main() -> None:
                 if updated_at > STABLE_CUTOFF:
                     raise AssertionError(f"stable memory too recent: {memory.memory_id}")
             type_counts[memory.memory_type] += 1
-            tier = TYPE_TO_TIER[memory.memory_type]
+            tier = tier_for(memory.memory_type)
             token_counts[tier] += len(encoding.encode(f"- {memory.content}\n"))
+        if set(type_counts) != EXPECTED_TYPES:
+            raise AssertionError(
+                f"unexpected types for {student['user_id']}: {sorted(type_counts)}"
+            )
+        for memory_type in ("foresight", "case"):
+            if not 8 <= type_counts[memory_type] <= 14:
+                raise AssertionError(
+                    f"{memory_type} count outside 8–14 for {student['user_id']}"
+                )
         if token_counts[0] < 950 or token_counts[1] < 1_100:
             raise AssertionError(f"cacheable tiers below target for {student['user_id']}")
         count = sum(type_counts.values())

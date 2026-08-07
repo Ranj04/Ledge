@@ -32,7 +32,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Sequence
 
-from app.assembler.tiering import NATURAL_TIER, TIER_NAMES, TIER_SOURCE, TierRegistry
+from app.assembler.tiering import TIER_NAMES, TIER_SOURCE, TierRegistry
+from app.memory_types import tier_for
 from app.contracts import (
     AssembledPrompt,
     ContentBlock,
@@ -161,9 +162,9 @@ def _assemble_naive(
         InjectedMemory(
             memory_id=m.memory_id,
             memory_type=m.memory_type,
-            tier=NATURAL_TIER[m.memory_type],
+            tier=tier_for(m.memory_type),
             tokens=_memory_tokens(m),
-            natural_tier=NATURAL_TIER[m.memory_type],
+            natural_tier=tier_for(m.memory_type),
         )
         for m in ordered
     ]
@@ -280,7 +281,7 @@ def _assemble_tiered(
             memory_type=m.memory_type,
             tier=assigned[m.memory_id],
             tokens=_memory_tokens(m),
-            natural_tier=NATURAL_TIER[m.memory_type],
+            natural_tier=tier_for(m.memory_type),
         )
         for tier in (0, 1, 2, 3)
         for m in by_tier[tier]

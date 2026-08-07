@@ -36,6 +36,31 @@ def _env_int(key: str, default: int) -> int:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Snowflake trial limits.
+#
+# Standard 30-day trial: $400 in credits, no credit card, Enterprise edition,
+# Cortex LLM functions included. Two constraints matter for a rehearsal loop:
+#
+#   * Trial accounts with no payment method are capped at roughly 10 credits
+#     per day on Cortex AI Functions. At ~2.55 credits per million tokens that
+#     is several million tokens a day — plenty for the demo, but a rehearsal
+#     loop left running could reach it, and the failure mode is Cortex simply
+#     refusing calls partway through the afternoon.
+#   * Trial accounts cannot make outbound network calls *from inside*
+#     Snowflake. Our architecture is unaffected — the app sits outside and
+#     calls in — but see EVENT_DAY.md before anyone proposes moving work into
+#     Snowflake.
+#
+# VERIFY-AT-EVENT: confirm the per-model credit rate in the Snowflake service
+# consumption table. 2.55 is the published figure for Sonnet-class models; a
+# different deployed model changes it.
+# ---------------------------------------------------------------------------
+
+CORTEX_CREDITS_PER_MTOK = 2.55
+TRIAL_DAILY_CREDIT_CAP = 10.0
+
+
 @dataclass(frozen=True)
 class Pricing:
     model: str = "claude-sonnet-4-5"

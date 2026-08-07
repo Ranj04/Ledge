@@ -35,7 +35,24 @@ const STARTER_PROMPTS = [
   'wait why are we calculating product from BOTH, isnt comparing moles enough',
 ]
 
-const TIER_NAMES = ['Frozen', 'Durable', 'Slow', 'Volatile']
+// Display-only safety net for a failed /api/status request. The API mapping
+// always wins when it is available.
+const STATUS_UNAVAILABLE_TIER_NAME_FALLBACK: Record<number, string> = {
+  0: 'Frozen',
+  1: 'Durable',
+  2: 'Slow',
+  3: 'Volatile',
+}
+
+function tierName(status: Status | undefined, tier: number) {
+  return status?.tiers[String(tier)]?.name
+    ?? STATUS_UNAVAILABLE_TIER_NAME_FALLBACK[tier]
+    ?? `Tier ${tier}`
+}
+
+function memoryTypeLabel(status: Status | undefined, memoryType: string) {
+  return status?.types[memoryType]?.label ?? memoryType
+}
 
 function makeId(prefix: string) {
   return `${prefix}_${crypto.randomUUID()}`
@@ -259,7 +276,7 @@ function Composer({
   )
 }
 
-function CostMeter({ latest, callCosts, streaming }: { latest?: DonePayload; callCosts: CallCost[]; streaming: boolean }) {
+function CostMeter({ latest, callCosts, streaming, status }: { latest?: DonePayload; callCosts: CallCost[]; streaming: boolean; status?: Status }) {
   const session = latest?.session
   const animatedCost = useAnimatedNumber(session?.cost_usd)
   const animatedBaseline = useAnimatedNumber(session?.baseline_cost_usd)
@@ -324,7 +341,7 @@ function CostMeter({ latest, callCosts, streaming }: { latest?: DonePayload; cal
                     key={tier}
                     className={`tier-segment tier-${tier} ${latest.tier_cached?.[String(tier)] ? 'is-cached' : 'is-full-price'}`}
                     style={{ flexGrow: tokens ?? 0, width: total ? undefined : '25%' }}
-                    title={`Tier ${tier} ${TIER_NAMES[tier]} · ${formatInteger(tokens)} tokens · ${latest.tier_cached?.[String(tier)] ? 'cached' : 'full price'}`}
+                    title={`Tier ${tier} ${tierName(status, tier)} · ${formatInteger(tokens)} tokens · ${latest.tier_cached?.[String(tier)] ? 'cached' : 'full price'}`}
                   />
                 )
               })}
@@ -335,7 +352,7 @@ function CostMeter({ latest, callCosts, streaming }: { latest?: DonePayload; cal
                 return (
                   <div key={tier}>
                     <span className={`tier-swatch tier-${tier} ${cached ? 'is-cached' : 'is-full-price'}`} />
-                    <span>{tier} {TIER_NAMES[tier]}</span>
+                    <span>{tier} {tierName(status, tier)}</span>
                     <strong>{formatInteger(latest.tier_tokens?.[String(tier)])} tok</strong>
                     <em>{cached === undefined ? '—' : cached ? 'cached' : 'full price'}</em>
                   </div>
@@ -483,7 +500,7 @@ function EmptyPanel({ message, command = FILL_COMMAND }: { message: string; comm
 
 type CostSort = 'cost_per_1k_calls_usd' | 'monthly_cost_usd' | 'injections' | 'tokens' | 'cache_hit_rate'
 
-function MemoryCostPanel({ costs, memories }: { costs: MemoryCost[]; memories: MemoryBody[] }) {
+function MemoryCostPanel({ costs, memories, status }: { costs: MemoryCost[]; memories: MemoryBody[]; status?: Status }) {
   const [sort, setSort] = useState<CostSort>('cost_per_1k_calls_usd')
   const [descending, setDescending] = useState(true)
   const bodies = new Map(memories.map((memory) => [memory.memory_id, memory.content]))
@@ -533,7 +550,10 @@ function MemoryCostPanel({ costs, memories }: { costs: MemoryCost[]; memories: M
               </tr></thead>
               <tbody>{rows.map((row, index) => (
                 <tr key={row.memory_id} className={index === 0 && sort === 'cost_per_1k_calls_usd' && descending ? 'highest-cost' : ''}>
-                  <td><span className={`table-tier tier-${row.tier}`} title={`Tier ${row.tier} ${TIER_NAMES[row.tier] ?? ''}`} />{row.tier}</td>
+                  <td>
+                    <span className={`table-tier tier-${row.tier}`} title={`Tier ${row.tier} ${tierName(status, row.tier)}`} />
+                    <span className="table-tier-copy">{row.tier}<small>{memoryTypeLabel(status, row.memory_type)}</small></span>
+                  </td>
                   <td><div className="memory-copy"><strong>{row.memory_id}</strong>{index === 0 && sort === 'cost_per_1k_calls_usd' && descending && <em>HIGHEST UNIT COST</em>}<span>{bodies.get(row.memory_id) ?? 'Memory body unavailable.'}</span></div></td>
                   <td>{formatInteger(row.tokens)}</td><td>{formatInteger(row.injections)}</td>
                   <td><div className="table-rate"><span><i style={{ width: `${Math.max(0, Math.min(100, finite(row.cache_hit_rate) * 100))}%` }} /></span><strong>{formatPercent(finite(row.cache_hit_rate))}</strong></div></td>
@@ -549,7 +569,7 @@ function MemoryCostPanel({ costs, memories }: { costs: MemoryCost[]; memories: M
   )
 }
 
-function CacheTierPanel({ rows }: { rows: CacheTierRow[] }) {
+function CacheTierPanel({ rows, status }: { rows: CacheTierRow[]; status?: Status }) {
   const lookup = new Map(rows.map((row) => [`${row.mode}-${row.tier}`, row]))
   return (
     <section className="dashboard-panel cache-tier-panel">
@@ -563,7 +583,7 @@ function CacheTierPanel({ rows }: { rows: CacheTierRow[] }) {
               const tiered = finite(lookup.get(`tiered-${tier}`)?.cache_hit_rate)
               return <div className="tier-chart-group" key={tier}>
                 <div className="chart-bars"><span className="chart-bar naive-bar" style={{ height: `${naive * 100}%` }} title={`Naive ${formatPercent(naive)}`} /><span className="chart-bar tiered-bar" style={{ height: `${tiered * 100}%` }} title={`Tiered ${formatPercent(tiered)}`} /></div>
-                <div className={`chart-tier tier-${tier}`}><strong>{tier}</strong><span>{TIER_NAMES[tier]}</span></div>
+                <div className={`chart-tier tier-${tier}`}><strong>{tier}</strong><span>{tierName(status, tier)}</span></div>
                 <div className="chart-values">{formatPercent(naive)} · {formatPercent(tiered)}</div>
               </div>
             })}
@@ -625,7 +645,7 @@ function FleetPanel({ data }: { data?: FleetResponse }) {
   )
 }
 
-function Dashboard({ userId }: { userId?: string }) {
+function Dashboard({ userId, status }: { userId?: string; status?: Status }) {
   const [costs, setCosts] = useState<MemoryCost[]>([])
   const [memories, setMemories] = useState<MemoryBody[]>([])
   const [cacheRows, setCacheRows] = useState<CacheTierRow[]>([])
@@ -657,7 +677,7 @@ function Dashboard({ userId }: { userId?: string }) {
     <main className="dashboard-workspace">
       <div className="dashboard-title"><div><span className="eyebrow">COST · CACHE · INFLUENCE</span><h1>Memory economics</h1></div><span>{loading ? 'Loading measured rows…' : `Student scope · ${userId ?? 'unavailable'}`}</span></div>
       {errors.length > 0 && <div className="dashboard-error" role="alert">Some dashboard data could not be loaded: {errors.join(' · ')}</div>}
-      <div className="dashboard-grid"><MemoryCostPanel costs={costs} memories={memories} /><CacheTierPanel rows={cacheRows} /><AblationPanel data={ablations} /><FleetPanel data={fleet} /></div>
+      <div className="dashboard-grid"><MemoryCostPanel costs={costs} memories={memories} status={status} /><CacheTierPanel rows={cacheRows} status={status} /><AblationPanel data={ablations} /><FleetPanel data={fleet} /></div>
     </main>
   )
 }
@@ -798,6 +818,14 @@ export default function App() {
         </nav>
 
         <div className="header-spacer" />
+        {Boolean(status?.unknown_types_seen.length) && (
+          <span
+            className="unknown-types-chip"
+            title={status?.unknown_types_seen.join(', ')}
+          >
+            ⚠ {status?.unknown_types_seen.length} unmapped memory types
+          </span>
+        )}
         <label className="student-select">
           <span>Student</span>
           <select
@@ -821,7 +849,7 @@ export default function App() {
       )}
 
       {view === 'dashboard' ? (
-        <Dashboard userId={selectedStudent?.user_id} />
+        <Dashboard userId={selectedStudent?.user_id} status={status} />
       ) : (
         <main className="tutor-workspace">
           <div className="tutor-column">
@@ -854,7 +882,7 @@ export default function App() {
             />
           </div>
 
-          <CostMeter latest={latest} callCosts={callCosts} streaming={streaming} />
+          <CostMeter latest={latest} callCosts={callCosts} streaming={streaming} status={status} />
         </main>
       )}
     </div>

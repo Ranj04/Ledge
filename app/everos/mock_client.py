@@ -30,11 +30,28 @@ from typing import Any
 
 from app.config import get_settings
 from app.contracts import Memory, MemoryType
+from app.memory_types import ALWAYS_INJECTED, normalise, tier_for
 
 SEED_PATH = Path("data/seed/students.json")
 
-TOP_K_SEMANTIC = 12
-TOP_K_EPISODIC = 10
+# Per-type retrieval budgets. Deliberately per *type*, not one pool per tier.
+#
+# Tier 3 holds Episodes, Foresights and Cases, and they answer different
+# questions — what happened, what is likely to happen, and how the agent
+# handled it. Ranking them together by recency let the newer Foresights and
+# Cases crowd out *every* Episode, so the prompt lost its session history
+# entirely. A real memory layer would not let predictions evict the record of
+# what actually happened.
+TOP_K: dict[str, int] = {
+    "fact": 12,
+    "episode": 8,
+    "foresight": 3,
+    "case": 3,
+}
+
+# Types ranked by recency rather than by word overlap: what happened lately
+# matters more than what happened in week one, regardless of phrasing.
+RECENCY_RANKED = frozenset({"episode", "foresight", "case"})
 
 _STOPWORDS = {
     "a", "about", "an", "and", "are", "as", "at", "be", "but", "by", "can",
@@ -75,7 +92,7 @@ class MockEverOSClient:
         data = json.loads(path.read_text())
         for student in data.get("students", []):
             self._by_user[student["user_id"]] = [
-                Memory(**m) for m in student.get("memories", [])
+                _from_seed(m) for m in student.get("memories", [])
             ]
 
     # -- EverOSClient ------------------------------------------------------
@@ -93,28 +110,25 @@ class MockEverOSClient:
 
         for memory in pool:
             score = lexical_score(query, memory.content)
-            if memory.memory_type in ("profile", "procedural"):
+            if memory.memory_type in ALWAYS_INJECTED:
                 # Always injected.  Score is still computed so the naive
                 # baseline has a real relevance ordering to sort by.
                 selected.append(_scored(memory, score))
 
-        ranked_semantic = sorted(
-            (_scored(m, lexical_score(query, m.content))
-             for m in pool if m.memory_type == "semantic"),
-            key=lambda m: (-m.score, m.memory_id),
-        )[:TOP_K_SEMANTIC]
+        # Each retrieved type gets its own budget, so no type can starve
+        # another out of the prompt.
+        for memory_type, budget in TOP_K.items():
+            candidates = [
+                _scored(m, lexical_score(query, m.content))
+                for m in pool
+                if m.memory_type == memory_type
+            ]
+            if memory_type in RECENCY_RANKED:
+                candidates.sort(key=lambda m: (m.updated_at or "", m.score), reverse=True)
+            else:
+                candidates.sort(key=lambda m: (-m.score, m.memory_id))
+            selected.extend(candidates[:budget])
 
-        # Episodic is recency-weighted: what happened lately matters more than
-        # what happened in week one, regardless of word overlap.
-        ranked_episodic = sorted(
-            (_scored(m, lexical_score(query, m.content))
-             for m in pool if m.memory_type == "episodic"),
-            key=lambda m: (m.updated_at or "", m.score),
-            reverse=True,
-        )[:TOP_K_EPISODIC]
-
-        selected.extend(ranked_semantic)
-        selected.extend(ranked_episodic)
         return selected
 
     async def write(
@@ -127,6 +141,10 @@ class MockEverOSClient:
         metadata: dict[str, Any] | None = None,
     ) -> Memory:
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        # Normalise on the way in. A caller passing "episodic" would otherwise
+        # store a non-canonical string that no type-keyed lookup matches, and
+        # the memory would be silently unretrievable.
+        memory_type = normalise(memory_type)
         memory = Memory(
             memory_id=f"mem_{uuid.uuid4().hex[:8]}",
             memory_type=memory_type,
@@ -135,7 +153,7 @@ class MockEverOSClient:
             agent_id=self.agent_id,
             app_id=self.app_id,
             project_id=self.project_id,
-            session_id=session_id if memory_type == "episodic" else None,
+            session_id=session_id if tier_for(memory_type) == 3 else None,
             score=0.0,
             created_at=now,
             updated_at=now,
@@ -179,3 +197,10 @@ def _scored(memory: Memory, score: float) -> Memory:
     from dataclasses import replace
 
     return replace(memory, score=round(score, 4))
+
+
+def _from_seed(raw: dict) -> Memory:
+    """Seed rows may carry the old type names; `normalise` maps them forward."""
+    row = dict(raw)
+    row["memory_type"] = normalise(row.get("memory_type"))
+    return Memory(**row)

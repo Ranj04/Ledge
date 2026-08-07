@@ -71,10 +71,10 @@ def prompt(mode: str, cumulative: dict[int, int]) -> AssembledPrompt:
         messages=[],
         mode=mode,  # type: ignore[arg-type]
         injected=[
-            InjectedMemory("mem_t0", "procedural", 0, 100, 0),
+            InjectedMemory("mem_t0", "skill", 0, 100, 0),
             InjectedMemory("mem_t1", "profile", 1, 100, 1),
-            InjectedMemory("mem_t2", "semantic", 2, 100, 2),
-            InjectedMemory("mem_t3", "episodic", 3, 100, 3),
+            InjectedMemory("mem_t2", "fact", 2, 100, 2),
+            InjectedMemory("mem_t3", "episode", 3, 100, 3),
         ],
         tier_tokens={0: 100, 1: 100, 2: 100, 3: 100},
         tier_cumulative_tokens=cumulative,

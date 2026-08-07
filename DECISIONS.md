@@ -457,3 +457,88 @@ Two regression tests guard the method rather than the output, because both earli
 invisible in the results table and visible only in how it was produced: one asserts a memory is
 never used to build its own probes, the other that neighbour selection excludes the memory under
 test.
+
+---
+
+## Event morning — 2026-08-07
+
+### D24. Memory types and tiers live in one module, because they have already changed once
+
+The overnight brief had the EverOS type names wrong. The real ones:
+
+| side | types |
+|---|---|
+| user | Profiles, Episodes, Facts, Foresights |
+| agent | Cases, Skills |
+
+| tier | types | why |
+|---|---|---|
+| 0 Frozen | system prompt + **Skills** | distilled procedure; changes on re-distillation, not per turn |
+| 1 Durable | **Profiles** | weeks to months |
+| 2 Slow | **Facts** | days — and the retrieved subset churns per query |
+| 3 Volatile | **Episodes, Foresights, Cases** + current turn | every turn, or unknown |
+
+**Why Foresights and Cases go to tier 3 despite plausibly being slower-moving.**
+The two errors are not symmetric:
+
+* calling a **volatile type stable** puts churning content in front of a cache breakpoint, which
+  invalidates that segment *and every segment behind it* on every turn — the cache hit rate
+  collapses and the headline number is wrong;
+* calling a **stable type volatile** only forgoes some savings on that type's tokens.
+
+One is a silent correctness failure, the other is a visible, bounded cost. **Fail toward the cheap
+error.** Both go to tier 3 until we have watched how often the live API rewrites them.
+
+*The refactor.* The mapping itself was already in one place (`NATURAL_TIER`), but the vocabulary,
+the tier labels, and the "always injected" policy were not: 95 literal occurrences across 13 files,
+the frontend holding its own `TIER_NAMES` array, and the injection policy hardcoded in three
+modules. `app/memory_types.py` is now the single source; the frontend reads it from `/api/status`
+rather than keeping a copy. This is the one speculative-looking abstraction we are allowing today,
+and it is not speculative — the names changed once already and may change again the first time we
+see the live API.
+
+*Old names still resolve.* `ALIASES` maps `procedural→skill`, `semantic→fact`, `episodic→episode`,
+plus the plurals and EverOS's doc spellings, so committed seed data and existing ledger rows keep
+loading and the rename did not have to land everywhere at once.
+
+### D25. An unrecognised memory type raises; at the network boundary it degrades *volatile* and says so
+
+`normalise(raw)` raises `UnknownMemoryType` by default, naming the value and the file to fix.
+Internal code uses that path, so a renamed type is a red test rather than a quiet re-bucketing.
+
+At the EverOS boundary we cannot crash the demo, so `normalise(raw, strict=False)` degrades — but
+it degrades to **tier 3 specifically**, never to a cacheable tier, for the asymmetry above. It also
+records the unmapped string, which `/api/status` publishes as `unknown_types_seen` and the UI shows
+as a warning chip.
+
+That last part is the actual point. Without it the only symptom of a renamed EverOS type is a
+worse cache hit rate that nobody attributes to the right cause — we would spend the afternoon
+debugging the Assembler for a mapping problem.
+
+### D26. Self-hosted EverOS, with cloud kept alive as a one-line fallback
+
+We are not getting EverOS credits, and self-hosted is the better option regardless: free, no
+per-operation charge, and it **removes a network hop from every turn**. Venue wifi is the single
+biggest live-failure risk today.
+
+Cloud and self-hosted expose the same HTTP API, so this is one client and one env var, not two
+clients. `RealEverOSClient` now requires `EVEROS_API_KEY` only when the base URL is **not** local —
+self-hosted runs unauthenticated, and demanding a key would have blocked the whole path.
+
+*Port collision, found before it bit us:* self-hosted EverOS defaults to **port 8000**, which is
+also ours. It keeps 8000 inside its container and compose publishes it on **8077**, so nothing has
+to be reconfigured and every document that says `localhost:8000` stays correct.
+
+*No published image.* EverMind ships a pip package and a CLI (`everos init`, `everos server start`),
+not a container, so `docker/everos.Dockerfile` is a thin wrapper around the documented install.
+
+### D27. The experiment runner reports credit spend, and refuses to run away
+
+The Snowflake trial gives $400 of credits with no card, but Cortex AI Functions are capped at
+roughly **10 credits/day** on accounts without a payment method. At ~2.55 credits per million
+tokens that is several million tokens daily — ample for the demo, and reachable by accident with a
+rehearsal loop.
+
+`scripts/experiment.py` now prints estimated credits for the sweep as a percentage of the daily cap
+and warns past 25% when actually billed, and `--max-runs` (default 40) refuses an oversized run
+rather than discovering the ceiling by hitting it mid-afternoon.

@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from app.api.schemas import ChatRequest, InspectRequest
 from app.api.service import Service, get_service
 from app.assembler.assemble import assemble
+from app import memory_types
 from app.assembler.tiering import TIER_NAMES, TIER_SOURCE, TierRegistry
 from app.contracts import AssembledPrompt, Usage
 from app.cortex.tokens import count_tokens
@@ -59,6 +60,10 @@ async def status() -> dict[str, Any]:
             "max_breakpoints": s.max_cache_breakpoints,
             "cache_ttl_seconds": s.cache_ttl_seconds,
         },
+        # Published so the frontend holds no second copy of the tier labels or
+        # the type mapping. `unknown_types_seen` is non-empty when EverOS has
+        # returned a type we do not recognise — visible rather than silent.
+        **memory_types.describe(),
     }
 
 
@@ -216,7 +221,7 @@ async def _persist(
     # ledger exists to measure.
     await service.everos.write(
         user_id=req.user_id,
-        memory_type="episodic",
+        memory_type="episode",
         content=f"Student asked: {req.message[:200]}",
         session_id=req.session_id,
         metadata={"call_id": call.call_id, "source": "live-session"},
@@ -423,13 +428,11 @@ async def ablation_results() -> dict[str, Any]:
 
 @router.get("/memories")
 async def memories(user_id: str) -> list[dict[str, Any]]:
-    from app.assembler.tiering import NATURAL_TIER
-
     return [
         {
             "memory_id": m.memory_id,
             "memory_type": m.memory_type,
-            "natural_tier": NATURAL_TIER[m.memory_type],
+            "natural_tier": memory_types.tier_for(m.memory_type),
             "content": m.content,
             "tokens": count_tokens(f"- {m.content}\n"),
             "updated_at": m.updated_at,

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.config import make_cortex_client, make_everos_client, make_ledger_store
 
+from app.memory_types import ALWAYS_INJECTED
 from ablation.harness import AblationResult, evaluate_memory
 
 PLANTED_PATH = Path("data/seed/planted.json")
@@ -61,7 +62,7 @@ def _print_table(results: list[AblationResult]) -> None:
         (
             result.memory_id,
             result.memory_type,
-            "always" if result.memory_type in ("profile", "procedural") else "conditional",
+            "always" if result.memory_type in ALWAYS_INJECTED else "conditional",
             str(result.tier),
             str(result.tokens),
             f"${result.monthly_cost_usd:.2f}",

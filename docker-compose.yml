@@ -1,0 +1,75 @@
+# MemoryLedger + self-hosted EverOS.
+#
+#     docker compose up -d everos     # memory layer only, app runs on the host
+#     docker compose up -d            # both
+#
+# Why self-hosted: it is free, has no per-operation charge, and — the reason
+# that actually matters today — it removes a network hop. Venue wifi is our
+# single biggest live-failure risk, and EverOS Cloud would put a round trip on
+# the critical path of every turn.
+#
+# PORTS. EverOS defaults to 8000 and so do we. EverOS keeps 8000 *inside* its
+# container and is published on 8077, so nothing has to be reconfigured and our
+# app keeps the port every document already refers to.
+#
+#     our service   host 8000
+#     EverOS        host 8077 -> container 8000
+#
+# Cloud remains a one-line fallback: set EVEROS_BASE_URL back to
+# https://api.evermind.ai with EVEROS_API_KEY. Same client, same code path.
+
+services:
+  everos:
+    build:
+      context: .
+      dockerfile: docker/everos.Dockerfile
+    ports:
+      - "8077:8000"
+    environment:
+      # EverOS runs its own extraction pipeline, so it needs its own model
+      # keys. THESE ARE OURS, NOT SPONSOR KEYS — see MORNING_STATUS.md.
+      EVEROS_LLM__API_KEY: ${EVEROS_LLM__API_KEY:?set this in .env}
+      EVEROS_EMBEDDING__API_KEY: ${EVEROS_EMBEDDING__API_KEY:?set this in .env}
+      EVEROS_MULTIMODAL__API_KEY: ${EVEROS_MULTIMODAL__API_KEY:-}
+      EVEROS_RERANK__API_KEY: ${EVEROS_RERANK__API_KEY:-}
+      EVEROS_LLM__BASE_URL: ${EVEROS_LLM__BASE_URL:-}
+      EVEROS_EMBEDDING__BASE_URL: ${EVEROS_EMBEDDING__BASE_URL:-}
+    volumes:
+      # Markdown + SQLite + LanceDB. Persisted so a restart does not wipe the
+      # demo's memory mid-event.
+      - everos-data:/data/everos
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      CORTEX_PROVIDER: ${CORTEX_PROVIDER:-sim}
+      EVEROS_PROVIDER: ${EVEROS_PROVIDER:-sim}
+      LEDGER_PROVIDER: ${LEDGER_PROVIDER:-sqlite}
+      # Container-to-container, so the service name rather than localhost.
+      EVEROS_BASE_URL: ${EVEROS_BASE_URL:-http://everos:8000}
+      EVEROS_API_KEY: ${EVEROS_API_KEY:-}
+      SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT:-}
+      SNOWFLAKE_PAT: ${SNOWFLAKE_PAT:-}
+      CORTEX_MODEL: ${CORTEX_MODEL:-claude-sonnet-4-5}
+      SQLITE_PATH: /data/ledger.db
+    volumes:
+      - app-data:/data
+    depends_on:
+      everos:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  everos-data:
+  app-data:

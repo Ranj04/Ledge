@@ -38,6 +38,14 @@ cd web && npm install && npm run build && cd ..
 
 Open <http://localhost:8000>. No credentials needed — it runs against faithful simulators.
 
+For the real memory layer, EverOS runs self-hosted alongside (free, no per-operation charge, and
+no network hop):
+
+```bash
+docker compose up -d everos    # published on host port 8077
+curl localhost:8077/health
+```
+
 Give the dashboard something to show:
 
 ```bash
@@ -52,12 +60,12 @@ Give the dashboard something to show:
 
 ```
   mode           mean     median     stdev        min        max    hit rate
-  naive    $ 0.087843 $ 0.086877 $0.001597 $ 0.086619 $ 0.090033       0.0%
-  tiered   $ 0.047903 $ 0.047290 $0.001129 $ 0.046975 $ 0.049443      64.2%
+  naive    $ 0.091455 $ 0.090387 $0.002203 $ 0.089535 $ 0.094443       0.0%
+  tiered   $ 0.051375 $ 0.050485 $0.001503 $ 0.050206 $ 0.053435      61.9%
 
-  reduction   mean 45.5%   median 45.4%   range 45.1%–45.9%   stdev 0.36%
+  reduction   mean 43.8%   median 43.9%   range 43.4%–44.1%   stdev 0.31%
   same answers in 18/18 runs
-  prompt size   naive 24,498 tok   tiered 24,610 tok   (same content, different layout)
+  prompt size   naive 25,527 tok   tiered 25,639 tok   (same content, different layout)
 ```
 
 ---
@@ -115,16 +123,20 @@ sql/             Snowflake DDL, rollups, reconciliation
 
 | Tier | EverOS type | Changes | Cached |
 |---|---|---|---|
-| 0 Frozen | system prompt + `procedural` | deploy-time | yes |
-| 1 Durable | `profile` | weeks–months | yes |
-| 2 Slow | `semantic` | days — but the retrieved *subset* churns per query | no |
-| 3 Volatile | `episodic` + the new message | every turn | no |
+| 0 Frozen | system prompt + `Skills` | on re-distillation only | yes |
+| 1 Durable | `Profiles` | weeks–months | yes |
+| 2 Slow | `Facts` | days — and the retrieved subset churns per query | no |
+| 3 Volatile | `Episodes`, `Foresights`, `Cases` + the new message | every turn, or unknown | no |
+
+Types and tiers live in exactly one module, `app/memory_types.py`; the frontend reads it from
+`/api/status` rather than keeping a copy. `Foresights` and `Cases` sit in tier 3 as a deliberate
+safe default — calling a volatile type stable destroys the cache for every tier behind it, while
+calling a stable type volatile only forgoes some savings (`DECISIONS.md` D24).
 
 Order is by **measured prefix stability**, not tier number: `0 → 1 → conversation history → 2 → 3`.
-Conversation history is append-only, so its prefix never changes; a top-k semantic retrieval
-reshuffles every question. A churning block poisons every stable block behind it, so tier 2 rides
-*behind* the history. Three breakpoints of the four available. That one change moved the result
-from 36.9% to 45.5% — the working is in `DECISIONS.md` D17.
+Conversation history is append-only so its prefix never changes; a top-k retrieval reshuffles every
+question. A churning block poisons every stable block behind it, so `Facts` ride *behind* the
+history. Three breakpoints of the four available (`DECISIONS.md` D17).
 
 ## Tests
 

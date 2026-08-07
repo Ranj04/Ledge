@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from app.assembler.assemble import assemble
-from app.assembler.tiering import NATURAL_TIER, TierRegistry
+from app.assembler.tiering import TierRegistry
 from app.config import make_cortex_client, make_everos_client, make_ledger_store
+from app.memory_types import ALWAYS_INJECTED, tier_for
 from app.contracts import Memory
 from app.cortex.tokens import count_tokens
 from app.everos.mock_client import lexical_score, tokenize
@@ -249,7 +250,7 @@ async def evaluate_memory(
         memory_id=memory.memory_id,
         user_id=memory.user_id,
         memory_type=memory.memory_type,
-        tier=NATURAL_TIER[memory.memory_type] if tier is None else tier,
+        tier=tier_for(memory.memory_type) if tier is None else tier,
         tokens=count_tokens(f"- {memory.content}\n"),
         monthly_cost_usd=float(monthly_cost_usd or 0.0),
         similarity=similarity,

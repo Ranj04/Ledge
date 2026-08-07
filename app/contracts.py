@@ -17,12 +17,10 @@ from typing import Any, AsyncIterator, Literal, Protocol, Sequence
 # Memory
 # ---------------------------------------------------------------------------
 
-# EverOS's four native memory types.  We do not invent a classifier; these map
-# onto volatility tiers directly (see app/assembler/tiering.py).
-MemoryType = Literal["profile", "semantic", "procedural", "episodic"]
-
-# Volatility tier.  0 = frozen (deploy-time), 3 = per-turn.
-Tier = int  # 0..3
+# Memory types and their volatility tiers live in exactly one module.  We do not
+# invent a classifier; EverOS's own types map onto volatility directly.
+# Re-exported here so existing imports keep working.
+from app.memory_types import MemoryType, Tier  # noqa: F401
 
 
 @dataclass

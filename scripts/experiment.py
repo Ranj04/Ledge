@@ -45,6 +45,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.assembler.assemble import assemble
 from app.assembler.tiering import TierRegistry
 from app.config import (
+    CORTEX_CREDITS_PER_MTOK,
+    TRIAL_DAILY_CREDIT_CAP,
     get_settings,
     make_cortex_client,
     make_everos_client,
@@ -188,6 +190,14 @@ def bar(value: float, peak: float, width: int = 28) -> str:
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs", type=int, default=20)
+    parser.add_argument(
+        "--max-runs",
+        type=int,
+        default=40,
+        help="hard ceiling on runs per conversation. The Snowflake trial caps "
+        "Cortex at ~10 credits/day without a payment method, and a rehearsal "
+        "loop is the way to reach it by accident.",
+    )
     parser.add_argument("--conversation", default=None)
     parser.add_argument("--json", action="store_true", help="emit machine-readable output")
     parser.add_argument(
@@ -198,6 +208,12 @@ async def main() -> int:
     args = parser.parse_args()
 
     settings = get_settings()
+    if args.runs > args.max_runs:
+        sys.exit(
+            f"--runs {args.runs} exceeds --max-runs {args.max_runs}. Raise the "
+            f"ceiling deliberately if that is what you want; the Snowflake "
+            f"trial caps Cortex at ~{TRIAL_DAILY_CREDIT_CAP:.0f} credits/day."
+        )
     conversations = load_conversations(args.conversation)
 
     ledger = None
@@ -243,6 +259,22 @@ async def main() -> int:
     )
     total_runs = len(results["naive"])
 
+    # Cortex bills in credits, not dollars. Every token this sweep sent, both
+    # modes, counted once — so a rehearsal loop cannot quietly eat the trial's
+    # daily allowance without saying so.
+    swept_tokens = sum(
+        r.input_tokens + r.output_tokens for mode in MODES for r in results[mode]
+    )
+    credits_used = swept_tokens / 1e6 * CORTEX_CREDITS_PER_MTOK
+    credits_block = {
+        "tokens_this_sweep": swept_tokens,
+        "credits_per_mtok": CORTEX_CREDITS_PER_MTOK,
+        "estimated_credits_this_sweep": credits_used,
+        "trial_daily_cap": TRIAL_DAILY_CREDIT_CAP,
+        "percent_of_daily_cap": credits_used / TRIAL_DAILY_CREDIT_CAP * 100,
+        "billed": settings.cortex_provider == "real",
+    }
+
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "providers": {
@@ -275,6 +307,7 @@ async def main() -> int:
             "tiered": statistics.mean([r.input_tokens for r in results["tiered"]]),
         },
         "identical_answer_runs": identical,
+        "credits": credits_block,
     }
 
     if args.json:
@@ -309,6 +342,17 @@ async def main() -> int:
           f"range {delta_stats['min']:.1%}–{delta_stats['max']:.1%}   "
           f"stdev {delta_stats['stdev']:.2%}")
     print(f"  same answers in {identical}/{total_runs} runs")
+    billed = "BILLED" if credits_block["billed"] else "not billed — simulators"
+    print(
+        f"  cortex credits  {credits_used:.3f} of ~{TRIAL_DAILY_CREDIT_CAP:.0f}/day "
+        f"({credits_block['percent_of_daily_cap']:.1f}%)   "
+        f"{swept_tokens:,} tok   [{billed}]"
+    )
+    if credits_block["billed"] and credits_block["percent_of_daily_cap"] > 25:
+        print(
+            "  ^ that is a meaningful slice of the trial's daily Cortex allowance. "
+            "Lower --runs before rehearsing again."
+        )
     print(f"  prompt size   naive {payload['input_tokens_mean']['naive']:,.0f} tok   "
           f"tiered {payload['input_tokens_mean']['tiered']:,.0f} tok   "
           "(same content, different layout)")

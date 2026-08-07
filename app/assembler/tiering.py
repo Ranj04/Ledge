@@ -2,12 +2,8 @@
 
 We do not invent a classifier.  EverOS already types every memory, and those
 types *are* volatility classes — that is the observation the whole Assembler
-rests on:
-
-    procedural  "how to tutor this student"        deploy-time      tier 0
-    profile     "who this student is"              weeks-months     tier 1
-    semantic    "what this student knows"          days             tier 2
-    episodic    "what happened in this session"    every turn       tier 3
+rests on.  The mapping lives in `app/memory_types.py`, which is the only place
+type names appear; this module owns the *trust* logic on top of it.
 
 The only judgement left is *trust*: a memory's type tells us how fast it is
 expected to change, but a specific memory may be churning right now.  Putting a
@@ -21,28 +17,15 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
-from app.contracts import Memory, MemoryType, Tier
-
-NATURAL_TIER: dict[MemoryType, Tier] = {
-    "procedural": 0,
-    "profile": 1,
-    "semantic": 2,
-    "episodic": 3,
-}
-
-TIER_NAMES = {
-    0: "Frozen",
-    1: "Durable",
-    2: "Slow",
-    3: "Volatile",
-}
-
-TIER_SOURCE = {
-    0: "System prompt + Skills",
-    1: "Profile",
-    2: "Semantic",
-    3: "Episodic + new message",
-}
+from app.contracts import Memory
+from app.memory_types import (  # noqa: F401  (re-exported for callers)
+    NATURAL_TIER,
+    tier_for,
+    TIER_NAMES,
+    TIER_SOURCE,
+    MemoryType,
+    Tier,
+)
 
 # Where an untrusted memory waits.  Tier 3 is never cached, so a memory parked
 # here costs full rate but cannot invalidate a cached prefix.
@@ -139,7 +122,7 @@ class TierRegistry:
 
         Call exactly once per memory per call — `stable_calls` counts calls.
         """
-        natural = NATURAL_TIER[memory.memory_type]
+        natural = tier_for(memory.memory_type)
         digest = memory.content_hash()
         state = self._states.get(memory.memory_id)
 

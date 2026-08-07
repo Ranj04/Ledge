@@ -37,7 +37,7 @@ async def test_never_retrieved_is_inconclusive() -> None:
     everos = make_everos_client()
     absent = Memory(
         memory_id="mem_not_in_store",
-        memory_type="semantic",
+        memory_type="fact",
         content="A fact no retrieval backend contains.",
         user_id="stu_maya_chen",
     )
@@ -102,14 +102,14 @@ def test_probes_do_not_use_memory_under_test(tmp_path: Path) -> None:
 def test_neighbour_probes_exclude_memory_under_test() -> None:
     target = Memory(
         memory_id="mem_target",
-        memory_type="semantic",
+        memory_type="fact",
         content="targetonly circularword",
         user_id="student",
     )
     neighbours = [
         Memory(
             memory_id=f"mem_neighbour_{index}",
-            memory_type="semantic",
+            memory_type="fact",
             content=f"shared topic neighbourword{index}",
             user_id="student",
         )
