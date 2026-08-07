@@ -1,27 +1,33 @@
 :root {
   color-scheme: dark;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 15px;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --bg: #090c10;
-  --panel: #10151c;
-  --panel-strong: #141b23;
-  --panel-soft: #0c1117;
-  --line: #29323d;
-  --line-strong: #3a4653;
-  --text: #f1f4f7;
-  --muted: #9aa7b4;
-  --dim: #6f7d89;
-  --cached: #45dec5;
-  --cached-dark: #163f3b;
+  --bg: #050518;
+  --panel: rgba(255, 255, 255, 0.045);
+  --panel-strong: rgba(255, 255, 255, 0.06);
+  --panel-soft: rgba(255, 255, 255, 0.03);
+  --header-bg: #04041a;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --text: #ffffff;
+  --muted: #a9aed6;
+  --dim: #7076a5;
+  --cached: #6b73ff;
+  --cached-dark: rgba(76, 86, 255, 0.16);
   --full: #f0a34a;
-  --full-dark: #4b351f;
+  --full-dark: rgba(240, 163, 74, 0.1);
   --error: #ffbc79;
-  --tier-0: #41d9c1;
-  --tier-1: #2ea99f;
-  --tier-2: #3e7777;
-  --tier-3: #526266;
+  --tier-0: #6b73ff;
+  --tier-1: #4f57e0;
+  --tier-2: #f0a34a;
+  --tier-3: #8f97b8;
+
+  /* Type system. Outfit for display, Instrument Sans for body, mono for every measured figure. */
+  --font-display: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums;
 }
 
@@ -41,7 +47,17 @@ body {
   min-width: 320px;
   overflow: hidden;
   background: var(--bg);
+  /* Single light source, top-left, so the header reads as lit and the page falls away. */
+  background-image: radial-gradient(
+    85% 46% at 12% -12%,
+    #262cd8 0%,
+    rgba(20, 22, 120, 0.42) 34%,
+    rgba(5, 5, 24, 0) 68%
+  );
+  background-attachment: fixed;
   color: var(--text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -1950,4 +1966,63 @@ textarea:focus-visible {
 @media (max-width: 720px) {
   .sales-view { padding: 28px 16px 64px; }
   .sales-row-figures { width: 100%; margin-left: 0; justify-content: space-between; gap: 14px; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Restyle layer — navy + electric blue.
+
+   Appended rather than woven into the rules above so the type system and
+   panel treatment win the cascade in one place, and so the restyle can be
+   lifted out again without unpicking 1,900 lines of existing selectors.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Display: every heading and every big number. */
+h1,
+h2,
+.empty-transcript h1,
+.hero-cost,
+.sales-stat strong,
+.sales-roi-result > strong,
+.sales-quota-figure strong {
+  font-family: var(--font-display);
+  font-weight: 300;
+  letter-spacing: -0.035em;
+}
+
+/* Measured figures are monospaced so digits line up column to column. */
+.eyebrow,
+.section-label,
+.empty-kicker,
+.money-cell,
+.table-rate strong,
+.sales-row-meta,
+.sales-annual,
+.sales-hit b,
+.sales-stage,
+.sales-play-kind,
+.sales-row-figures-grid dd,
+.sales-slider-head strong,
+.sales-roi-result dd,
+.sales-quota-head span,
+.sales-quota-foot,
+.provider-chip,
+.seeded-tag {
+  font-family: var(--font-mono);
+}
+
+/* Panels: one radius, one hairline, one inset highlight. */
+.chat-panel,
+.inspector-panel,
+.cost-meter,
+.dashboard-card,
+.sales-panel,
+.sales-stat {
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.app-header {
+  background: var(--header-bg);
+  border-bottom: 1px solid var(--line);
 }

@@ -8,7 +8,7 @@ Current state, verified this afternoon:
 |---|---|
 | OpenAI inference | ✅ **live** — `cached_tokens` observed on real responses. **42.9%** input-side reduction over 3 conversations. |
 | EverOS | ✅ live path verified — probe passes 11/11. Demo runs on seeded memory on purpose (D19). |
-| Snowflake ledger | ✅ **live** — DDL applied, rows landing in `MEMORYLEDGER.LEDGER`, rollup views built. |
+| Snowflake ledger | ⚠️ **works, but not on the demo path** — DDL applied and a full sweep recorded (382 calls, 39,728 injections), rollups correct in Snowsight. The session-summary endpoint wedges against it, so **the demo runs on sqlite**. See BLOCKERS. |
 | Snowflake Cortex | ⛔ **not available** — the trial account has no Cortex entitlement on any surface. Not fixable today. |
 | Simulators | ✅ 118 tests + 5 ablation green. The offline fallback, still works. |
 
@@ -22,7 +22,7 @@ Three independent switches, so a failure is always attributable:
 ```
 CORTEX_PROVIDER=openai|sim|real   inference   ← openai. `real` = Cortex, entitlement refused.
 EVEROS_PROVIDER=sim|real          memory      ← real path verified; demo uses sim on purpose
-LEDGER_PROVIDER=snowflake|sqlite  ledger      ← snowflake, verified
+LEDGER_PROVIDER=sqlite|snowflake  ledger      ← sqlite for the demo. snowflake wedges the meter.
 ```
 
 ---
@@ -100,11 +100,10 @@ The live number is `usage.prompt_tokens_details.cached_tokens` on each response.
 
 ---
 
-## Step 3 — The headline number (10 min, ~$4 of API spend)
+## Step 3 — The headline number (8 min, ~$1.75 of API spend)
 
 ```bash
-CORTEX_PROVIDER=openai LEDGER_PROVIDER=snowflake \
-  .venv/bin/python scripts/experiment.py --runs 10 --record
+.venv/bin/python scripts/experiment.py --runs 4 --record
 ```
 
 **Expect:** naive at a **0.0%** hit rate, tiered around **47%**, reduction near **42.9%**.
@@ -153,7 +152,8 @@ anywhere (`DECISIONS.md` D21).
 
 Walk `DEMO.md` out loud with a timer.
 
-- [ ] Provider chip shows `openai` / `sim` / `snowflake`. If any is wrong, know which and why.
+- [ ] Provider chip shows `openai` / `gpt-5.6-terra` / **live**. It reads the real provider now, so
+      if it says simulated, `.env` did not load — that chip is the smoke test.
 - [ ] No ⚠️ unmapped-memory-types chip in the header.
 - [ ] Message streams, receipt appears, hero cost **non-zero**.
 - [ ] Turn 1 shows a **negative** saving with the explanatory note — correct, not a bug.
@@ -168,11 +168,12 @@ Walk `DEMO.md` out loud with a timer.
 ## The one-line switch
 
 ```bash
-# today's target
-CORTEX_PROVIDER=openai  EVEROS_PROVIDER=sim   LEDGER_PROVIDER=snowflake
-
-# ledger misbehaving — drop to local, nothing else changes
+# today's target — this is what .env is set to
 CORTEX_PROVIDER=openai  EVEROS_PROVIDER=sim   LEDGER_PROVIDER=sqlite
+
+# only if someone asks to see rows in Snowflake. The meter stalls on this;
+# a sweep is already recorded there, so show Snowsight instead of switching.
+CORTEX_PROVIDER=openai  EVEROS_PROVIDER=sim   LEDGER_PROVIDER=snowflake
 
 # no network at all — everything simulated, always works
 CORTEX_PROVIDER=sim     EVEROS_PROVIDER=sim   LEDGER_PROVIDER=sqlite
@@ -222,7 +223,8 @@ one environment variable flips back the moment the entitlement exists.
 **If asked what is real versus simulated today**, the honest three-part answer:
 
 - **Real:** the Assembler, live OpenAI inference, `cached_tokens` off real responses, the ledger and
-  cost math in Snowflake, the EverOS integration (verified live, 11/11, four contract bugs found and
+  cost math (schema and rollups are Snowflake, and a full sweep is recorded there; the live demo
+  writes to a local copy), the EverOS integration (verified live, 11/11, four contract bugs found and
   fixed against the actual API).
 - **Simulated:** the ablation verdicts, which were scored against the simulator's replies; the
   tutor's memory is a seeded eight-week history rather than live-extracted.

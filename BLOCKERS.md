@@ -273,3 +273,37 @@ Assembler's message construction, which is the product, on the afternoon of the 
 user turn entirely for the implicit-cache path, then check whether `cached_tokens` grows turn on
 turn. The conversation-history breakpoint that D17 was built around is worth revisiting at the same
 time: on this provider it is not a breakpoint, it is just ordering.
+
+## 2026-08-07 — `LEDGER_PROVIDER=snowflake` wedges the session-summary endpoint
+
+**Status:** open. **The demo runs on `LEDGER_PROVIDER=sqlite`.** Rows landing in Snowflake is a
+nice-to-have; the hero cost meter is not.
+
+`GET /api/session/{id}/summary` hangs indefinitely against the Snowflake ledger — 45s, reproducibly,
+twice in a row, after a five-turn conversation. The chat endpoint itself is fine (streaming, cost,
+cache all correct), so this is the *read* path only. On sqlite the same endpoint returns instantly
+and every dashboard panel populates.
+
+**This is a regression I introduced today, and it is a straight trade.** Every query used to open
+its own connection, which was isolated but unusably slow — a `--record` sweep paid a multi-second
+connect per call and took over an hour. Replacing that with one shared connection under a lock made
+it ~3× faster and made `--record` practical. It also means **one wedged query blocks every query
+behind it**: `network_timeout` / `socket_timeout` bound the socket, not a statement already in
+flight, so a stuck read holds the lock and everything queues behind it. Per-connection isolation did
+not have this failure mode.
+
+The likely trigger is the connection being left in a bad state by the heavy concurrent insert load
+of a `--record` sweep running at the same time as dashboard reads.
+
+*Options, in order of preference:*
+
+1. Use a small connection pool rather than one shared connection — keeps most of the speed, removes
+   head-of-line blocking.
+2. Share the connection for writes only and open per-query connections for reads. Reads are
+   infrequent; writes are the hot path that needed the fix.
+3. Revert to per-query connections everywhere and accept slow `--record`.
+
+Not attempted before the event: the demo path is secured on sqlite, and this is the ledger's
+storage backend rather than anything the audience sees. Snowflake still holds a full recorded sweep
+(382 calls, 39,728 injections) and the rollup views read it correctly from Snowsight — that is what
+to show if anyone asks to see the tables.

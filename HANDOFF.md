@@ -118,3 +118,33 @@ to any other value driven by that hook.
 
 *Why it matters on stage:* it will probably work, because a projected tab is focused. But the
 single most important number on screen should not be one power-saving heuristic away from blank.
+
+### R2 → whoever is holding `web/`: three inert Playbook CTAs in the Sales view
+
+**Open.** Found 2026-08-07 ~15:50 while re-verifying `Sales Dashboard.dc.html` against the
+claude.ai/design project. Not a demo-path blocker — the Sales tab is otherwise complete and every
+number on it reproduces live from `/api/ledger/fleet`.
+
+`web/src/SalesView.tsx:358` renders the Playbook call-to-action as a bare button with no handler:
+
+```tsx
+<button type="button" className="sales-cta">{account.play!.cta}</button>
+```
+
+In the mockup these are links. Each names a destination that already exists on another tab —
+`Open prompt inspector` and `Show both layouts` → tutor, `Open per-memory ledger` → dashboard — so
+a rep clicks mid-call and lands nowhere.
+
+*Fix:* pass `setView` from `App.tsx` down as an `onNavigate` prop, add a `target` field to the
+`play` objects in `BOOK`, wire `onClick`. Wiring only — no restyle, no copy or number changes.
+
+A ready-to-run Sol prompt is saved at `.sol/prompts/sales-cta-wiring.md`. I launched it at 15:49
+and **codex exited after ~10 seconds** having printed only its plan: empty `.out`, no `final.md`,
+no edit to `web/`. Worth a retry; the prompt itself is fine.
+
+*Not done by me deliberately.* A second Claude session (PID 30576, started 15:45) was editing
+`BLOCKERS.md`, `DEMO.md` and `EVENT_DAY.md` at the same time, so I made no code change and ran no
+git command rather than commit across another session's in-flight work.
+
+*Also:* I ran `pkill -f "python -m app"` at ~15:47 to free port 8000 for Sol. If a verification
+run died under you around then, that was me. Sorry.

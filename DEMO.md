@@ -94,8 +94,17 @@ turns before pointing at the percentage.**
 *Do:* switch to the **Dashboard**, per-memory cost panel.
 
 > "Once you know which memories went into which call, you know what each memory costs. Per memory,
-> per month. This is Snowflake — every call we make lands in a table there, and these rollups are
-> SQL over it. No memory system tracks this today."
+> per month. No memory system tracks this today."
+
+*If you want to name Snowflake here, this is the accurate version — say it and move on:*
+
+> "The ledger schema and the rollups are Snowflake. There's a full recorded run sitting in
+> `MEMORYLEDGER.LEDGER` right now — 382 calls, forty thousand injection rows — and these four views
+> are SQL over it. This laptop is writing to a local copy during the demo so the meter can't stall
+> on a network round trip."
+
+*Do not say "every call lands in Snowflake" while the panel is running on sqlite.* If someone wants
+to see the tables, open Snowsight — the sweep is really there.
 
 *Point at:* the top row.
 
