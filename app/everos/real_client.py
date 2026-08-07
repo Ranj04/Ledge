@@ -1,34 +1,32 @@
-"""EverOS Cloud client.
+"""EverOS client — Cloud (api.evermind.ai) or self-hosted, same v2 API.
 
-Written tonight, unexercised until the event. Every uncertain line is marked
-`# VERIFY-AT-EVENT:`.
+Rewritten 2026-08-07 against the published v2 reference
+(https://docs.evermind.ai/llms-full.txt). The previous version was written
+from a partial reading and had four contract bugs, three of them silent. They
+are documented in DECISIONS.md; the short version:
 
-What the documentation confirms (checked 2026-08-06):
+* `search` / `get` take **exactly one** of `user_id` / `agent_id`. The old
+  `_scope()` merged `agent_id` into every body alongside `user_id` -> 422 on
+  every retrieval.
+* `timestamp` is **unix milliseconds**, integer. The old client sent ISO-8601
+  -> 400 InvalidParameter on every write.
+* A search response carries **typed lists** — `episodes`, `profiles`,
+  `agent_cases`, `agent_skills` — not a flat `results` array. The old
+  `_items()` looked for `results` / `memories` / `items` / `hits`, found none,
+  and returned `[]`. Retrieval would have succeeded with zero memories: the
+  demo runs, the meter moves, and the numbers are meaningless.
+* Facts and foresights are **not separately retrievable**. They live inside an
+  episode's MemCell as `atomic_facts[]` and `foresight`. Nothing exploded them
+  out, so tier 2 — the churning layer the whole Assembler argument rests on —
+  would have been empty.
 
-* Base URL: ``https://api.evermind.ai`` (cloud) or ``http://127.0.0.1:8000`` (OSS).
-* Auth: ``Authorization: Bearer <api-key>``.
-* ``POST /api/v2/memory/search`` — body carries `query`, `user_id`/`agent_id`,
-  `app_id`, `project_id`, `top_k`, and a `method` selecting keyword / vector /
-  hybrid / agentic search.
-* ``POST /api/v2/memory/add`` — body carries `session_id`, `app_id`,
-  `project_id` and a `messages` array of `{sender_id, role, content, timestamp}`.
-  Returns **202** with `status: "queued"` when async, **200** when
-  `async_mode: false`.
-* ``POST /api/v2/memory/flush`` — forces pending extraction into durable storage.
-* Responses use the envelope ``{"request_id": "...", "data": {...}}``.
-
-What it does not confirm: the exact field names on a returned memory object and
-the exact memory-type string constants. Both are handled by `_parse_memory`,
-which accepts several spellings and falls back rather than raising — an unknown
-type lands in the volatile tier, which is the safe direction: it costs full
-price but cannot invalidate a cached prefix.
+Anything still unverified is marked `# VERIFY-AT-EVENT:`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -36,17 +34,31 @@ from urllib.parse import urlparse
 
 from app.config import get_settings
 from app.contracts import Memory, MemoryType
-from app.memory_types import ALWAYS_INJECTED, NATURAL_TIER, normalise
+from app.memory_types import ALWAYS_INJECTED, normalise
 
-# How long the always-injected set (Skills, Profiles) is reused before re-fetching. These
-# change on a scale of weeks; a minute of staleness is invisible and keeps
-# tier 0/1 byte-stable within a conversation.
+# How long the always-injected set (Skills, Profiles) is reused before
+# re-fetching. These change on a scale of weeks; a minute of staleness is
+# invisible and keeps tier 0/1 byte-stable within a conversation.
 STABLE_CACHE_TTL = 60.0
+
+# Which v2 response list maps to which canonical type. The type comes from the
+# list a hit arrived in — hits carry no `memory_type` field of their own.
+LIST_TYPES: dict[str, MemoryType] = {
+    "agent_skills": "skill",
+    "profiles": "profile",
+    "episodes": "episode",
+    "agent_cases": "case",
+}
 
 
 def _is_local(base_url: str) -> bool:
     host = urlparse(base_url).hostname or ""
     return host in ("localhost", "127.0.0.1", "::1", "everos", "host.docker.internal")
+
+
+def _now_ms() -> int:
+    """Unix milliseconds. The API rejects anything below 1_000_000_000_000."""
+    return int(time.time() * 1000)
 
 
 class RealEverOSClient:
@@ -55,11 +67,10 @@ class RealEverOSClient:
         self.settings = s
         base = s.everos_base_url.rstrip("/")
 
-        # Cloud and self-hosted expose the same HTTP API, so this is one client
+        # Cloud and self-hosted expose the same v2 API, so this is one client
         # and one env var, not two clients. Self-hosted runs unauthenticated on
         # a private network, so the key is required only when we are talking to
-        # a remote host — demanding one locally would block the whole
-        # self-hosted path for no benefit.
+        # a remote host.
         headers = {"Content-Type": "application/json"}
         if s.everos_api_key:
             headers["Authorization"] = f"Bearer {s.everos_api_key}"
@@ -73,47 +84,71 @@ class RealEverOSClient:
         self.client = httpx.AsyncClient(base_url=base, headers=headers, timeout=30.0)
         self._stable_cache: dict[str, tuple[float, list[Memory]]] = {}
 
-    def _scope(self) -> dict[str, str]:
+    def _partition(self) -> dict[str, str]:
+        """Scope keys that are safe on every call.
+
+        Deliberately excludes `agent_id`: the API requires exactly one of
+        `user_id` / `agent_id`, so an agent id merged into a user-scoped body
+        is a 422, not a narrowing filter.
+        """
         return {
-            "agent_id": self.settings.everos_agent_id,
             "app_id": self.settings.everos_app_id,
             "project_id": self.settings.everos_project_id,
         }
 
+    async def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        response = await self.client.post(path, json=body)
+        response.raise_for_status()
+        payload = response.json()
+        return payload.get("data", payload) if isinstance(payload, dict) else {}
+
     # -- EverOSClient ------------------------------------------------------
 
-    async def _search(self, body: dict[str, Any], user_id: str) -> list[Memory]:
-        response = await self.client.post("/api/v2/memory/search", json=body)
-        response.raise_for_status()
-        return [_parse_memory(item, user_id, self._scope()) for item in _items(response.json())]
+    async def _get(self, memory_type: str, owner: dict[str, str]) -> list[Memory]:
+        """List one memory type for one owner.
+
+        `get` rather than `search` on purpose. Search is relevance-ranked, so
+        the tier 0/1 set would reorder with every question and the cached
+        prefix would never be byte-identical twice — which is the exact failure
+        the Assembler exists to prevent. `get` is a deterministic listing.
+        """
+        data = await self._post(
+            "/api/v2/memory/get",
+            {
+                "memory_type": memory_type,
+                **owner,
+                "page_size": 100,
+                "sort_by": "timestamp",
+                "sort_order": "desc",
+                **self._partition(),
+            },
+        )
+        return _explode(data, owner, self._partition())
 
     async def _stable_set(self, user_id: str, now: float) -> list[Memory]:
         """Every always-injected memory (Skills, Profiles), cached briefly.
 
-        These are injected in full on every turn (DECISIONS.md D12) and they
-        change on a scale of weeks, so re-fetching them each turn is a network
-        round trip for the same bytes. A short TTL keeps the tier-0/1 content
-        stable *within* a conversation, which is exactly what the cache needs.
+        Two calls, not one: skills are agent-owned and profiles are user-owned,
+        and a body may carry only one of those ids.
         """
         cached = self._stable_cache.get(user_id)
         if cached and now - cached[0] < STABLE_CACHE_TTL:
             return cached[1]
 
-        # VERIFY-AT-EVENT: confirm the filter key for memory type. If EverOS
-        # ignores it, the client-side filter below still produces the right
-        # set — just less efficiently.
-        memories = await self._search(
-            {
-                "query": "",
-                "user_id": user_id,
-                "top_k": 500,
-                "method": "keyword",
-                "memory_types": sorted(ALWAYS_INJECTED | {"skills", "profiles"}),
-                **self._scope(),
-            },
-            user_id,
+        profiles, skills = await asyncio.gather(
+            self._get("profile", {"user_id": user_id}),
+            self._get("agent_skill", {"agent_id": self.settings.everos_agent_id}),
+            return_exceptions=True,
         )
-        stable = [m for m in memories if m.memory_type in ALWAYS_INJECTED]
+        found: list[Memory] = []
+        for result in (profiles, skills):
+            if isinstance(result, list):
+                found.extend(result)
+
+        stable = [m for m in found if m.memory_type in ALWAYS_INJECTED]
+        # Deterministic order. The API's own ordering is stable, but ties are
+        # not specified, and one reordered pair costs the entire cached prefix.
+        stable.sort(key=lambda m: (m.memory_type, m.created_at or "", m.memory_id))
         self._stable_cache[user_id] = (now, stable)
         return stable
 
@@ -129,26 +164,33 @@ class RealEverOSClient:
 
         This mirrors `MockEverOSClient` deliberately. A single blended search
         with one `top_k` would let volatile memories crowd out profile and
-        procedural ones, so tier 0 and tier 1 membership would change with the
-        question — which is the exact failure the Assembler exists to prevent.
-        Switching providers must change the dependency, not the algorithm.
+        skill ones, so tier 0 and tier 1 membership would change with the
+        question. Switching providers must change the dependency, not the
+        algorithm.
         """
         now = time.monotonic()
         body: dict[str, Any] = {
             "query": query,
             "user_id": user_id,
             "top_k": limit,
-            # VERIFY-AT-EVENT: "hybrid" is documented as one of keyword | vector
-            # | hybrid | agentic.  "agentic" is likely better but costs an extra
-            # model call per retrieval, which would pollute our own cost ledger.
+            # VERIFY-AT-EVENT: "agentic" retrieves better but spends an extra
+            # model call per turn, which would land in our own cost ledger and
+            # muddy the number the demo rests on. Staying on hybrid.
             "method": "hybrid",
-            **self._scope(),
+            # Profiles arrive via the stable set above; asking for them here
+            # too would inject them twice.
+            "include_profile": False,
+            **self._partition(),
         }
         if session_id:
-            body["session_id"] = session_id
+            # A top-level `session_id` equality scalar is also what makes the
+            # API return `unprocessed_messages` — the not-yet-extracted tail of
+            # the live session. Nested or operator-wrapped forms leave it empty.
+            body["filters"] = {"session_id": session_id}
 
         stable, retrieved = await asyncio.gather(
-            self._stable_set(user_id, now), self._search(body, user_id)
+            self._stable_set(user_id, now),
+            self._search(body, user_id),
         )
 
         seen = {m.memory_id for m in stable}
@@ -159,6 +201,10 @@ class RealEverOSClient:
         ]
         return [*stable, *volatile]
 
+    async def _search(self, body: dict[str, Any], user_id: str) -> list[Memory]:
+        data = await self._post("/api/v2/memory/search", body)
+        return _explode(data, {"user_id": user_id}, self._partition())
+
     async def write(
         self,
         *,
@@ -168,10 +214,18 @@ class RealEverOSClient:
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Memory:
-        now = _now()
+        """Append a turn. EverOS decides the memory type, not us.
+
+        `memory_type` stays in the signature because the Protocol requires it
+        and the simulator honours it, but it is not sent: extraction assigns
+        types itself, and there is no documented hint field. What comes back
+        out of retrieval is the type that counts.
+        """
+        now = _now_ms()
+        # No top-level `user_id` here — attribution is per message, via
+        # `sender_id`. The docs call this out as a common mistake.
         body = {
             "session_id": session_id or "default",
-            "user_id": user_id,
             "messages": [
                 {
                     "sender_id": user_id,
@@ -180,119 +234,233 @@ class RealEverOSClient:
                     "timestamp": now,
                 }
             ],
-            # VERIFY-AT-EVENT: EverOS extracts memory types itself from the
-            # message stream. If it accepts a hint, this is the field name to
-            # confirm; if it does not, the write still lands and EverOS decides
-            # the type, which is the behaviour we want anyway.
-            "memory_type": memory_type,
-            "metadata": metadata or {},
-            **self._scope(),
+            **self._partition(),
         }
-        response = await self.client.post("/api/v2/memory/add", json=body)
-        response.raise_for_status()
+        data = await self._post("/api/v2/memory/add", body)
 
-        payload = response.json().get("data", {}) or {}
+        # Async by default: the response is `{"message_count": N, "status":
+        # "queued"}` and carries no memory id, because no memory exists yet.
+        # The id below is a local placeholder, never a claim about storage.
         return Memory(
-            memory_id=str(payload.get("id") or payload.get("memory_id") or f"pending_{now}"),
+            memory_id=f"pending_{now}",
             memory_type=memory_type,
             content=content,
             user_id=user_id,
             session_id=session_id,
-            created_at=now,
-            updated_at=now,
-            metadata=metadata or {},
-            **{k: v for k, v in self._scope().items()},
+            created_at=str(now),
+            updated_at=str(now),
+            metadata={**(metadata or {}), "status": str(data.get("status", "queued"))},
+            **self._partition(),
         )
 
     async def all_for_user(self, *, user_id: str) -> list[Memory]:
-        """Full memory set for the dashboard and the ablation harness.
-
-        # VERIFY-AT-EVENT: there is no documented "list all" endpoint. This
-        # uses search with an empty query and a large top_k, which the hybrid
-        # method should degrade to a recency listing. If it returns nothing,
-        # try `method: "keyword"` with `query: "*"`, and if that fails, page
-        # through search with the user's subject terms.
-        """
-        response = await self.client.post(
-            "/api/v2/memory/search",
-            json={"query": "", "user_id": user_id, "top_k": 1000,
-                  "method": "keyword", **self._scope()},
+        """Full memory set for the dashboard and the ablation harness."""
+        owners: list[tuple[str, dict[str, str]]] = [
+            ("profile", {"user_id": user_id}),
+            ("episode", {"user_id": user_id}),
+            ("agent_case", {"agent_id": self.settings.everos_agent_id}),
+            ("agent_skill", {"agent_id": self.settings.everos_agent_id}),
+        ]
+        results = await asyncio.gather(
+            *(self._get(t, o) for t, o in owners), return_exceptions=True
         )
-        response.raise_for_status()
-        return [_parse_memory(item, user_id, self._scope()) for item in _items(response.json())]
+        return [m for r in results if isinstance(r, list) for m in r]
 
     async def flush(self, *, session_id: str) -> None:
-        """Force pending extraction. Worth calling once before the demo so the
-        first turn does not race EverOS's async extraction pipeline."""
+        """Force pending extraction.
+
+        Worth calling once before the demo so the first turn does not race the
+        async extraction pipeline. Returns `no_extraction` when no semantic
+        boundary was found, which is not an error.
+        """
         await self.client.post(
-            "/api/v2/memory/flush", json={"session_id": session_id, **self._scope()}
+            "/api/v2/memory/flush",
+            json={"session_id": session_id, **self._partition()},
         )
 
     async def health(self) -> dict[str, Any]:
-        """Self-hosted EverOS exposes GET /health -> {"status": "ok"}.
+        """Separate "EverOS is unreachable" from "our request is wrong".
 
-        Used by EVENT_DAY step 3 to separate "EverOS is not running" from
-        "EverOS is running and our request is wrong", which are very different
-        problems to be debugging under time pressure.
+        `/health` is documented for self-hosted only. On Cloud we probe with a
+        cheap authenticated `get` instead — a 401 there is a bad key, which is
+        the thing actually worth distinguishing at 11am.
         """
-        response = await self.client.get("/health")
-        response.raise_for_status()
-        return response.json()
+        base = str(self.client.base_url)
+        if _is_local(base):
+            response = await self.client.get("/health")
+            response.raise_for_status()
+            return response.json()
+
+        response = await self.client.post(
+            "/api/v2/memory/get",
+            json={"memory_type": "profile", "user_id": "_healthcheck", "page_size": 1},
+        )
+        return {"status": "ok" if response.status_code < 500 else "error",
+                "http_status": response.status_code}
 
     async def aclose(self) -> None:
         await self.client.aclose()
 
 
 # ---------------------------------------------------------------------------
+# Response parsing
+# ---------------------------------------------------------------------------
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+# Keys inside `profile_data` that are bookkeeping rather than things the tutor
+# should be told. Verified against the live account 2026-08-07: dumping every
+# key put `confidence: 0.0`, `update_count: 1` and raw JSON blobs into tier 1 —
+# the always-injected, cached tier, and the one whose contents are on screen in
+# the prompt inspector.
+PROFILE_PLUMBING = frozenset(
+    {"confidence", "profile_timestamp_ms", "update_count", "id", "version", "user_id"}
+)
+PROFILE_STRUCTURED = frozenset({"summary", "explicit_info", "implicit_traits"})
 
 
-def _items(payload: Any) -> list[dict[str, Any]]:
-    """Unwrap the `{request_id, data}` envelope.
+def _profile_memories(item: dict[str, Any], attrs: dict[str, Any], build) -> list[Memory]:
+    """Turn one EverOS profile into readable per-attribute memories.
 
-    # VERIFY-AT-EVENT: confirm whether results sit at data.results, data.memories
-    # or directly in data as a list. All three are handled.
+    Live shape (probed 2026-08-07):
+
+        profile_data = {
+          "summary": "...",
+          "explicit_info":   [{"category", "description", "evidence", "item_id", ...}],
+          "implicit_traits": [{"trait", "description"}],
+          "confidence": 0.0, "update_count": 1, "profile_timestamp_ms": ...,
+        }
+
+    Only the prose is worth injecting. An unknown *string* attribute is still
+    kept, so a new field EverOS adds shows up rather than being dropped; an
+    unknown non-string is not, because that is how JSON ends up in the prompt.
     """
-    if isinstance(payload, list):
-        return payload
-    data = payload.get("data", payload) if isinstance(payload, dict) else {}
-    if isinstance(data, list):
-        return data
-    for key in ("results", "memories", "items", "hits"):
-        value = data.get(key)
-        if isinstance(value, list):
-            return value
-    return []
+    out: list[Memory] = []
+
+    summary = attrs.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        out.append(build(item, "profile", summary.strip(), "_summary"))
+
+    for index, entry in enumerate(attrs.get("explicit_info") or []):
+        if not isinstance(entry, dict):
+            continue
+        description = entry.get("description") or entry.get("value")
+        if not description:
+            continue
+        category = entry.get("category")
+        text = f"{category}: {description}" if category else str(description)
+        out.append(build(item, "profile", text, f"_e{entry.get('item_id', index)}"))
+
+    for index, entry in enumerate(attrs.get("implicit_traits") or []):
+        if isinstance(entry, dict):
+            trait, description = entry.get("trait"), entry.get("description")
+            text = (
+                f"{trait}: {description}"
+                if trait and description and description != trait
+                else str(description or trait or "")
+            )
+        else:
+            text = str(entry or "")
+        if text.strip():
+            out.append(build(item, "profile", text.strip(), f"_t{index}"))
+
+    for key in sorted(attrs):
+        if key in PROFILE_STRUCTURED or key in PROFILE_PLUMBING:
+            continue
+        value = attrs[key]
+        if isinstance(value, str) and value.strip():
+            out.append(build(item, "profile", f"{key}: {value.strip()}", f"_{key}"))
+
+    return out
 
 
-def _parse_memory(item: dict[str, Any], user_id: str, scope: dict[str, str]) -> Memory:
-    # strict=False: this is untrusted API data and a mapping gap must not take
-    # down the demo. It degrades to tier 3 — full price for itself, but it
-    # cannot invalidate a cached prefix — and records the string so it shows up
-    # in /api/status rather than vanishing. See app/memory_types.py.
-    memory_type: MemoryType = normalise(
-        item.get("memory_type") or item.get("type") or item.get("surface"), strict=False
-    )
+def _explode(data: Any, owner: dict[str, str], partition: dict[str, str]) -> list[Memory]:
+    """Flatten a v2 `data` envelope into Memory objects.
 
-    content = str(
-        item.get("content") or item.get("text") or item.get("memory") or item.get("summary") or ""
-    )
-    score = item.get("score", item.get("relevance", item.get("similarity", 0.0)))
+    Two things happen here that the old parser did not do at all.
 
-    return Memory(
-        memory_id=str(item.get("id") or item.get("memory_id") or f"unknown_{hash(content) & 0xFFFFFF}"),
-        memory_type=memory_type,
-        content=content,
-        user_id=str(item.get("user_id") or user_id),
-        agent_id=item.get("agent_id") or scope["agent_id"],
-        app_id=item.get("app_id") or scope["app_id"],
-        project_id=item.get("project_id") or scope["project_id"],
-        session_id=item.get("session_id"),
-        score=float(score) if isinstance(score, (int, float)) else 0.0,
-        created_at=item.get("created_at") or item.get("timestamp"),
-        updated_at=item.get("updated_at") or item.get("created_at") or item.get("timestamp"),
-        metadata=item.get("metadata") or {},
-    )
+    First, the type comes from *which list* a hit arrived in. Hits carry no
+    `memory_type` field, so a per-item lookup finds nothing and everything
+    lands in the fallback tier.
+
+    Second, an episode is unpacked into its parts. EverOS returns a MemCell —
+    narrative plus `atomic_facts[]` plus an optional `foresight` — as one
+    object, but those parts have very different volatility: "User role is
+    Marketing Manager" is stable for months while the narrative around it is
+    rewritten every session. Kept whole, the whole MemCell has to sit in the
+    volatile tier and tier 2 stays empty. Split, the facts can be cached and
+    only the narrative churns. This split is what gives the Assembler
+    something to do.
+    """
+    if not isinstance(data, dict):
+        return []
+
+    out: list[Memory] = []
+    user_id = owner.get("user_id", "")
+
+    def build(item: dict[str, Any], mem_type: MemoryType, content: str, suffix: str = "") -> Memory:
+        base_id = str(item.get("id") or item.get("memory_id") or abs(hash(content)) % 0xFFFFFF)
+        score = item.get("score", 0.0)
+        return Memory(
+            memory_id=f"{base_id}{suffix}",
+            memory_type=mem_type,
+            content=content,
+            user_id=str(item.get("user_id") or user_id),
+            agent_id=item.get("agent_id") or owner.get("agent_id"),
+            session_id=item.get("session_id"),
+            score=float(score) if isinstance(score, (int, float)) else 0.0,
+            created_at=item.get("timestamp") or item.get("created_at"),
+            updated_at=item.get("updated_at") or item.get("timestamp"),
+            metadata={},
+            **partition,
+        )
+
+    for list_name, mem_type in LIST_TYPES.items():
+        for item in data.get(list_name) or []:
+            if not isinstance(item, dict):
+                continue
+
+            if mem_type == "profile":
+                # `profile_data` is a dict of attributes. One Memory per
+                # attribute: the ledger prices memories individually, and a
+                # single blob would make every profile fact share one cost.
+                attrs = item.get("profile_data")
+                if isinstance(attrs, dict):
+                    out.extend(_profile_memories(item, attrs, build))
+                    continue
+
+            if mem_type == "episode":
+                for fact in item.get("atomic_facts") or []:
+                    text = fact.get("content") if isinstance(fact, dict) else str(fact)
+                    if text:
+                        fid = fact.get("id", "") if isinstance(fact, dict) else ""
+                        out.append(build(item, "fact", str(text), f"_f{fid or len(out)}"))
+
+                foresight = item.get("foresight")
+                if isinstance(foresight, dict) and foresight.get("prediction"):
+                    out.append(build(item, "foresight", str(foresight["prediction"]), "_fs"))
+
+                # `episode` is the full narrative meant for the prompt;
+                # `summary` is a ~200-char preview. Prefer the narrative.
+                narrative = item.get("episode") or item.get("summary") or ""
+                if narrative:
+                    out.append(build(item, "episode", str(narrative)))
+                continue
+
+            content = str(
+                item.get("content")
+                or item.get("description")
+                or item.get("episode")
+                or item.get("summary")
+                or ""
+            )
+            if content:
+                out.append(build(item, normalise(mem_type, strict=False), content))
+
+    # The in-flight tail: messages added but not yet extracted into a MemCell.
+    # Volatile by definition — they are the newest thing in the session.
+    for msg in data.get("unprocessed_messages") or []:
+        if isinstance(msg, dict) and msg.get("content"):
+            out.append(build(msg, "episode", str(msg["content"]), "_raw"))
+
+    return out

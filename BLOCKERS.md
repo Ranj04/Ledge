@@ -109,3 +109,66 @@ Every uncertain line is marked `-- VERIFY-AT-EVENT:`.
 
 Note this view lags **up to 45 minutes**. It is a post-hoc credibility check — "our ledger agrees
 with Snowflake's own billing record" — and must never be wired to the live meter.
+
+## 2026-08-07 — EverOS live path unverified from this session
+
+`app/everos/real_client.py` was rewritten against the published v2 reference but has
+**never touched the live API**. Three network paths were tried and all are blocked:
+the cloud sandbox cannot reach api.evermind.ai (403 at the egress proxy), the browser
+is blocked by CORS, and the device bridge has no network at all.
+
+**Needs:** `.venv/bin/python tests/probe_everos_live.py` on the laptop. It checks the
+four assumptions the rewrite rests on and prints the real response shapes. Highest
+risk is a `403 VERSION_NOT_ALLOWED` — key valid but the account provisioned for
+legacy v1, which no client-side fix addresses. Find that out before 11am.
+
+**Also unverified:** the venv is macOS-built, so nothing in it runs inside the device
+bridge VM — `pytest` has to be run on the laptop too.
+
+**git through the bridge is unreliable.** The mount forbids unlink, so git leaves a
+stale `.git/index.lock` after each command and `commit` will likely refuse. Run git
+from a normal terminal; if a commit fails on the lock, `rm .git/index.lock` first.
+
+## 2026-08-07 — `SNOWFLAKE_PAT` is blank: Cortex is unverified
+
+**Status:** blocked on one human action. Everything else is done and waiting.
+
+`SNOWFLAKE_PAT` is empty in `.env`, and `SNOWFLAKE_PASSWORD` is too, so there is **no path to the
+Snowflake account at all** from this machine. Cross-region inference cannot be enabled, Claude
+cannot be reached, the ledger DDL cannot be applied, and — most importantly — **`cached_tokens`
+has never been observed from real Cortex.**
+
+There is a genuine bootstrap problem, not an oversight: PAT authentication requires a network
+policy to already exist on the user, so the policy and the token cannot be created over a PAT
+connection. `externalbrowser` auth needs a configured IdP and this is a native Snowflake account.
+
+**Exactly three statements, by hand, in Snowsight, as `ACCOUNTADMIN`:**
+
+```sql
+CREATE NETWORK POLICY IF NOT EXISTS cacheguard_np ALLOWED_IP_LIST = ('0.0.0.0/0');
+ALTER USER RANJIV SET NETWORK_POLICY = cacheguard_np;
+ALTER USER IF EXISTS RANJIV ADD PROGRAMMATIC ACCESS TOKEN cacheguard DAYS_TO_EXPIRY = 2;
+```
+
+The third returns `token_name` / `token_secret`. **The secret displays once.** It goes into
+`SNOWFLAKE_PAT` in `.env` and nowhere else — never echoed, never committed. `DAYS_TO_EXPIRY = 2`
+is deliberate; the token outlives the event and nothing more. `0.0.0.0/0` is open on purpose:
+pinning an IP now means a 401 on venue wifi tomorrow, on a 30-day trial with no card attached.
+
+Then `EVENT_DAY.md` step 1 runs end to end unattended.
+
+**What remains genuinely unknown until then**, and it is not a small one: whether prompt caching
+survives **cross-region inference**. There are no Claude models in us-east-2, so calls must route
+via `CORTEX_ENABLED_CROSS_REGION = 'AWS_US'`, and no documentation states whether cache affinity is
+preserved across that routing. If it is not, `cached_tokens` returns zero with no error to explain
+it. `EVENT_DAY.md` step 1 has the escalation order and the honest fallback.
+
+## 2026-08-07 — EverOS extraction returns Spanish for English input
+
+Observed in the live probe: English messages in, and the profile came back as
+`"probe_user_001 está estudiando AP Calculus BC"` with an implicit trait of `"aprendizaje
+práctico"`. The episode summary was in English; the profile was not.
+
+No documented language control on `/api/v2/memory/add`. Not chased — the demo runs on seeded
+memory (`DECISIONS.md` D19), so this does not touch the demo path. It is recorded because it is a
+real property of the integration and someone will otherwise rediscover it live and be surprised.

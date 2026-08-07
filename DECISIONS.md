@@ -542,3 +542,125 @@ rehearsal loop.
 `scripts/experiment.py` now prints estimated credits for the sweep as a percentage of the daily cap
 and warns past 25% when actually billed, and `--max-runs` (default 40) refuses an oversized run
 rather than discovering the ceiling by hitting it mid-afternoon.
+
+## D18 — 2026-08-07 — EverOS Cloud, and four contract bugs in the unexercised real client
+
+Switched to **EverOS Cloud** (`EVEROS_PROVIDER=real`, `EVEROS_BASE_URL=https://api.evermind.ai`).
+Cloud does extraction server-side, so `EVEROS_LLM__API_KEY` / `EVEROS_EMBEDDING__API_KEY`
+and the `everos` docker container are no longer needed on the demo path. The
+self-hosted route stays configured as a fallback — one env var flips back.
+
+Read the published v2 reference (docs.evermind.ai/llms-full.txt) and rewrote
+`app/everos/real_client.py` against it. The previous version was written from a
+partial reading and had four bugs. Three would not have raised:
+
+1. **Both owner ids on every call.** `_scope()` merged `agent_id` into bodies that
+   already carried `user_id`. The API takes *exactly one* -> 422 on every retrieval.
+   Split into `_partition()` (app_id/project_id, always safe) and explicit owner args.
+2. **ISO-8601 timestamps.** `timestamp` must be unix milliseconds >= 1e12.
+   Every write would have 400'd.
+3. **Wrong response shape — silent.** v2 returns typed lists (`episodes`,
+   `profiles`, `agent_cases`, `agent_skills`), not a flat array. The old `_items()`
+   probed for `results`/`memories`/`items`/`hits`, found none, returned `[]`.
+   Retrieval would have succeeded with zero memories: the demo runs, the meter
+   moves, the numbers mean nothing. This is the one that would have cost us the event.
+4. **Tier 2 structurally empty — silent.** Facts and foresights are not separately
+   retrievable; they live inside an episode MemCell as `atomic_facts[]` and
+   `foresight`. Nothing unpacked them, so `fact` (tier 2) could never be populated.
+   `_explode()` now splits a MemCell into its parts.
+
+(4) is not just a fix, it is the integration's load-bearing idea. A MemCell mixes
+volatilities: "User is studying AP Calculus BC" is stable for months while the
+narrative wrapped around it is rewritten every session. Kept whole, the whole cell
+must sit in the volatile tier and the Assembler has almost nothing to sort. Split,
+the facts cache and only the narrative churns. **The tiering argument depends on
+unbundling EverOS's atomic facts from its episodes.**
+
+Also switched the tier 0/1 fetch from `search` to `get`. Search is relevance-ranked,
+so the always-injected set would reorder with every question and the cached prefix
+would never be byte-identical twice — the exact failure the Assembler exists to
+prevent. `get` is a deterministic listing; results are additionally sorted by
+(type, created_at, id) client-side because ties are unspecified and one reordered
+pair costs the whole prefix.
+
+Using raw httpx against the v2 HTTP API rather than the `everos-cloud` SDK: the
+contracts are HTTP-first, the SDK is a thin wrapper, and one less pinned dependency
+matters more than ergonomics today.
+
+`OPENAI_API_KEY` is in `.env` but has no consumer — Cloud extracts server-side and
+tutor inference goes through Cortex. Kept as a possible fallback inference path.
+Note that falling back to OpenAI weakens the demo: OpenAI caching is implicit with a
+1,024-token minimum and no `cache_control`, so the Assembler could not place
+breakpoints and we would be measuring their heuristic, not our algorithm.
+
+### D19 — 2026-08-07 — EverOS Cloud is the deployment; the demo still runs on seeded memory
+
+**Cloud, not self-hosted.** Cloud is wired, the key works, and it does extraction server-side — so
+`EVEROS_LLM__API_KEY` / `EVEROS_EMBEDDING__API_KEY` and the `everos` container are off the critical
+path entirely. Nobody supplied those keys, so self-hosted was never actually available today. The
+compose file stays as a fallback; one env var flips back.
+
+**But the demo conversation runs with `EVEROS_PROVIDER=sim`, and that is a deliberate choice.**
+
+The live path is verified — `tests/probe_everos_live.py` passes all eleven checks against the real
+account, and `RealEverOSClient` returns correctly typed, correctly exploded memories from it. What
+the cloud account does *not* have is our seeded students, and it cannot simply be given them:
+`/api/v2/memory/add` takes **conversation messages**, not typed memories. EverOS extracts the
+memories itself. Loading Maya's eight-week history would mean replaying ~520 messages, waiting on
+async extraction, spending roughly 52 MemCells of quota, and ending up with memories EverOS wrote
+rather than the ones the demo is built around.
+
+Two further reasons, both observed rather than assumed:
+
+* **Extraction returned Spanish for English input.** The probe sent English and got back
+  `"probe_user_001 está estudiando AP Calculus BC"` and `"aprendizaje práctico"`. Profile memories
+  are on screen in the prompt inspector; a bilingual tier 1 is a distraction we do not need.
+* It puts a network round trip on every turn, on venue wifi.
+
+*What we say:* the EverOS integration is real and verified live — we found and fixed four contract
+bugs against the actual v2 API, three of which fail silently — and the demo runs against a seeded
+eight-week history so the tutoring story is legible and reproducible. Both statements are true and
+neither oversells.
+
+### D20 — 2026-08-07 — the live probe confirmed all four contract bugs, and found two more
+
+`tests/probe_everos_live.py`, first contact with the real API. All four assumptions behind the D18
+rewrite hold:
+
+| assumption | live result |
+|---|---|
+| account is on v2 | 200 — not `VERSION_NOT_ALLOWED` |
+| both `user_id`+`agent_id` rejected | **422** — the old client would have failed every retrieval |
+| ISO timestamps rejected | **400** — unix-ms was necessary |
+| typed lists, no flat array | `episodes / profiles / agent_cases / agent_skills` |
+| episodes carry `atomic_facts` | 1 fact — this is what populates tier 2 at all |
+
+Two problems the probe surfaced that the rewrite had not caught:
+
+1. **Profile explosion dumped plumbing into tier 1.** `_explode()` emitted one memory per
+   `profile_data` key, so `confidence: 0.0`, `update_count: 1`, `profile_timestamp_ms: …` and raw
+   JSON blobs went into the **always-injected, cached** tier — the one whose contents are on screen
+   in the prompt inspector. Now only prose is extracted: the summary, each `explicit_info`
+   description with its category, and each `implicit_trait`. Unknown *string* attributes are still
+   kept so a new EverOS field surfaces; unknown non-strings are not, because that is how JSON gets
+   into a prompt.
+2. **The test suite was not hermetic.** Once a real `.env` existed, `load_dotenv()` in
+   `app/config.py` pointed `pytest` at live EverOS and at `claude-opus-5`'s 512-token cache floor.
+   Twelve tests failed for reasons unrelated to the code. `conftest.py` now pins simulator
+   providers and the cache constants before `app.config` is imported. A suite whose result depends
+   on the operator's `.env` cannot tell you whether the build is sound.
+
+### D21 — 2026-08-07 — the experiment refuses to report a number from an empty memory store
+
+Pointing `scripts/experiment.py` at live EverOS — where the seeded students do not exist — produced
+a complete, plausible run: no error, a full distribution, identical answers, **7.8% reduction**
+instead of 43.8%. Prompt size had collapsed from 25,527 tokens to 3,046 and nothing said so.
+
+This is the exact failure D18 bug 3 describes — "retrieval succeeds with zero memories, the demo
+runs, the meter moves, the numbers mean nothing" — reaching the one script whose output goes on a
+slide.
+
+`run_pair` now raises if a turn retrieves fewer than 20 memories, naming the user and the provider.
+The seeded students carry 150+ each, so the threshold cannot fire on a healthy run. **Refusing to
+produce a number is always better than producing a wrong one**, and a guard is worth more than a
+comment because this failure has no visible symptom.

@@ -57,6 +57,10 @@ from app.telemetry.cost import build_records
 CONVERSATIONS = Path("data/seed/conversations.json")
 MODES = ("naive", "tiered")
 
+# The seeded students carry 150+ memories each. Anything close to zero means
+# the provider is pointed somewhere without our data.
+MIN_MEMORIES_PER_TURN = 20
+
 
 @dataclass
 class RunResult:
@@ -128,6 +132,19 @@ async def run_pair(conversation: dict, run_index: int, *, ledger=None) -> dict[s
         memories = await everos.retrieve(
             user_id=conversation["user_id"], query=turn, session_id=sessions["tiered"]
         )
+        # A memory store that returns almost nothing still produces a complete,
+        # plausible-looking result — the run finishes, the meter moves, and the
+        # percentage is meaningless. That happened: pointing at live EverOS,
+        # where the seeded students do not exist, gave 7.8% instead of 43.8%
+        # with no error anywhere. Refuse rather than report it.
+        if len(memories) < MIN_MEMORIES_PER_TURN:
+            raise RuntimeError(
+                f"retrieval returned {len(memories)} memories for "
+                f"{conversation['user_id']!r} — expected at least "
+                f"{MIN_MEMORIES_PER_TURN}. The configured memory provider "
+                f"almost certainly has no data for this user. Any number this "
+                f"run produced would be meaningless."
+            )
         shared_answer: str | None = None
 
         for mode in MODES:

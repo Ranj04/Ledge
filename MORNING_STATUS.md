@@ -43,8 +43,8 @@ did then start the API himself on 8765 — a browser instance is still unavailab
 Yes. Verified from a clean ledger this morning, not assumed:
 
 - **91 tests + 5 ablation tests green.**
-- **Experiment:** naive `$0.087843` → tiered `$0.047903`, **45.5% reduction**, 64.2% cache hit
-  rate, identical answers 9/9, range 45.1–45.9%.
+- **Experiment:** **45.5% reduction** at triage time. *(Superseded — the final measured figure
+  after the six-type seed is **43.8%**; see the bottom of this file.)*
 - **Conversation:** streams, receipts render, hero cost moves. Turn 1 shows `-$0.0017` with the
   explanatory note; it clears once positive.
 - **Toggle:** flipped to Naive mid-conversation, per-call cost bar visibly taller. 3 receipts,

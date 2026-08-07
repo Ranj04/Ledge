@@ -58,10 +58,10 @@ EverOS's own memory types map onto volatility. Do not invent a classifier.
 
 | Tier | EverOS memory type | Changes | Cached |
 |---|---|---|---|
-| 0 Frozen | system prompt + `procedural` (Skills) | deploy-time only | yes |
-| 1 Durable | `profile` | weeks–months | yes |
-| 2 Slow | `semantic` | days (but the retrieved *subset* churns per query) | no |
-| 3 Volatile | `episodic` + the user's new message | every turn | no |
+| 0 Frozen | system prompt + `Skills` | on re-distillation only | yes |
+| 1 Durable | `Profiles` | weeks–months | yes |
+| 2 Slow | `Facts` | days — but the retrieved *subset* churns per query | **no** |
+| 3 Volatile | `Episodes`, `Foresights`, `Cases` + the user's new message | every turn, or unknown | **no** |
 
 **Prompt order is by measured prefix stability, not by tier number:**
 
@@ -76,7 +76,7 @@ the student's question
 Conversation history is **append-only** — its prefix never changes, it only grows — so it caches
 better than a top-k semantic retrieval that reshuffles every question. A churning block poisons
 every stable block behind it, so tier 2 rides behind the history rather than in front of it.
-Three breakpoints of the four available. Measured: 36.9% → 45.5%. See DECISIONS.md D17.
+Three breakpoints of the four available. Measured: 36.9% → **43.8%**. See DECISIONS.md D17.
 
 `naive` mode is the honest baseline — memories near the front of the prompt in relevance order, no
 breakpoints, i.e. how agents are normally built. It is production code, not a strawman. Never

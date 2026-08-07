@@ -99,10 +99,10 @@ EverOS's own memory types map onto volatility. Use them; do not invent a classif
 
 | Tier | EverOS type | Changes | Cached |
 |---|---|---|---|
-| 0 Frozen | system prompt + `procedural` (Skills) | deploy-time only | yes |
-| 1 Durable | `profile` | weeks–months | yes |
-| 2 Slow | `semantic` | days (but the retrieved *subset* churns per query) | no |
-| 3 Volatile | `episodic` + the new user message | every turn | no |
+| 0 Frozen | system prompt + `Skills` | on re-distillation only | yes |
+| 1 Durable | `Profiles` | weeks–months | yes |
+| 2 Slow | `Facts` | days — but the retrieved *subset* churns per query | **no** |
+| 3 Volatile | `Episodes`, `Foresights`, `Cases` + the new user message | every turn, or unknown | **no** |
 
 **Prompt order is by measured prefix stability, not by tier number:**
 
@@ -118,7 +118,7 @@ Conversation history is **append-only** — its prefix never changes, it only gr
 better than a top-k semantic retrieval that reshuffles every question. A churning block poisons
 every stable block behind it, so tier 2 rides behind the history rather than in front of it.
 Three breakpoints of the four available; the fourth would have to sit on churning content.
-Measured: 36.9% -> 45.5% cost reduction. Full working in DECISIONS.md D17.
+Measured: 36.9% -> **43.8%** cost reduction. Full working in DECISIONS.md D17.
 
 **Tier drift:** if a tier-1 memory's content changes, the cache for tiers 1–3 invalidates on the
 next call. Promote a memory to a slower tier only after it has been content-stable for

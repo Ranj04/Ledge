@@ -39,8 +39,8 @@ No consumer of the old shape existed at the time of the change.
 **Everything in the "done" list is done.** 91 tests green. `python -m app` serves a working tutor
 and a four-panel dashboard against simulators, from a clean clone, with no credentials.
 
-Headline, measured: **46.5% lower cost per conversation** (naive $0.085226 → tiered $0.045592),
-64.3% cache hit rate, identical answers in 18/18 runs, range 46.1–47.2%, stdev 0.49%.
+Headline, measured: **43.8% lower cost per conversation** (naive $0.091455 → tiered $0.051375),
+61.9% cache hit rate, identical answers in 18/18 runs, range 43.4–44.1%, stdev 0.31%.
 
 The two things a reader should know before touching anything:
 
