@@ -1,6 +1,6 @@
 # MemoryLedger
 
-**An agent that remembers more should not cost more.**
+**An agent that remembers more, should not cost more.**
 
 Two pieces of infrastructure, demonstrated under a study tutor.
 
