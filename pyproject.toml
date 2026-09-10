@@ -17,6 +17,13 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# tests/review/ holds the OTHER model's adversarial tests. T0.3 kept them out of
+# pytest with norecursedirs, but ruff still linted them -- so a reviewer's test
+# could turn the BUILDER's gate red, which is the exact inversion tests/review/
+# exists to prevent: the builder could not tell "I broke something" from "the
+# reviewer filed a finding". Excluding them here completes T0.3's own intent.
+# Reviewers run their own tests explicitly: pytest -q tests/review
+extend-exclude = ["tests/review"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
