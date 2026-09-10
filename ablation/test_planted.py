@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ablation.harness import build_probes, evaluate_memory, neighbour_probes
+from ablation.harness import build_probes, evaluate_memory, neighbour_probes, verdict_for
 from app.config import make_cortex_client, make_everos_client
 from app.contracts import Memory
 
@@ -120,3 +120,10 @@ def test_neighbour_probes_exclude_memory_under_test() -> None:
     assert len(probes) == 4
     assert all("targetonly" not in probe and "circularword" not in probe for probe in probes)
     assert all("neighbourword" in probe for probe in probes)
+
+
+def test_skill_policy_and_evidence_based_verdicts() -> None:
+    assert verdict_for(1.0, memory_type="skill") == "policy"
+    assert verdict_for(1.0, memory_type="profile") == "evict"
+    assert verdict_for(1.0, memory_type="episode") == "evict"
+    assert verdict_for(1.0, memory_type="skill", probes_tested=1) == "policy"

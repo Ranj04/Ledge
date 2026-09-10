@@ -29,6 +29,7 @@ pertinent recent material sits closest to the question.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal
@@ -89,9 +90,23 @@ TIER_HEADERS = {
 
 NAIVE_HEADER = "## What I remember about this student"
 
+_WS = re.compile(r"\s+")
+_LEADING_MARKUP = re.compile(r"^[#\-*\s]+")
+
 
 def _render(memory: Memory) -> str:
-    return f"- {memory.content}\n"
+    """One memory, one line.
+
+    A memory is data about the student, not text the model composed. Rendered
+    raw, a stored turn containing newlines writes additional lines into the
+    prompt -- verified: one hostile episode produced three lines, one of them a
+    forged '## How to tutor this student' header, and mock_client._memory_lines
+    re-parsed the block as three memories. Collapsing whitespace and stripping
+    leading markup makes that structurally impossible rather than unlikely.
+    """
+    flat = _WS.sub(" ", memory.content.replace("\u2028", " ").replace("\u2029", " "))
+    flat = _LEADING_MARKUP.sub("", flat).strip()
+    return f"- {flat}\n"
 
 
 def _memory_tokens(memory: Memory) -> int:
