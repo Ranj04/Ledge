@@ -333,9 +333,7 @@ async def main() -> int:
             "everos": settings.everos_provider,
             "model": settings.active_model,
         },
-        "measurement": (
-            "live" if settings.cortex_provider in ("real", "openai") else "simulated"
-        ),
+        "measurement": "live" if settings.is_live else "simulated",
         "conversations": [c["conversation_id"] for c in conversations],
         "turns": sum(len(c["turns"]) for c in conversations),
         "runs_per_conversation": args.runs,

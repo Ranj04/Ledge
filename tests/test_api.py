@@ -390,3 +390,49 @@ def test_inspect_does_not_advance_the_live_tier_registry(client):
 
     after = {s.memory_id: (s.stable_calls, s.tier) for s in registry.states()}
     assert after == before, "the dry run changed the state it was previewing"
+
+
+# ---------------------------------------------------------------------------
+# Liveness. One predicate, so the status chip and the ablation banner cannot
+# disagree about whether a run went to a real model.
+# ---------------------------------------------------------------------------
+
+PROVIDERS = [("sim", False), ("openai", True), ("real", True)]
+
+
+@pytest.mark.parametrize(("provider", "expected"), PROVIDERS)
+def test_every_live_provider_is_reported_as_live(provider, expected):
+    """`openai` is the production inference path and must read as live.
+
+    Before `Settings.is_live` existed the ablation route evaluated it as
+    simulated and put "scored against the simulator" on screen after a run
+    against a real model. Calls the property directly: no HTTP, no credentials.
+    """
+    import dataclasses
+
+    from app.config import get_settings
+
+    settings = dataclasses.replace(get_settings(), cortex_provider=provider)
+    assert settings.is_live is expected
+
+
+@pytest.mark.parametrize(("provider", "expected"), PROVIDERS)
+def test_the_ablation_endpoint_and_the_status_endpoint_agree_about_liveness(
+    client, monkeypatch, provider, expected
+):
+    """Through the real routes, not a restatement of the expression.
+
+    Only the settings object the routes read is swapped; the inference client
+    behind them is still the simulator, so no provider is contacted.
+    """
+    import dataclasses
+
+    live_settings = dataclasses.replace(service_module.get_service().settings,
+                                        cortex_provider=provider)
+    monkeypatch.setattr(service_module.get_service(), "settings", live_settings)
+
+    status = client.get("/api/status").json()
+    ablation = client.get("/api/ledger/ablation").json()
+
+    assert status["live"] is expected
+    assert (ablation["provenance"] == "live") is expected

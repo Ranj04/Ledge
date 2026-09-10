@@ -53,7 +53,7 @@ async def status() -> dict[str, Any]:
             # reporting a number we did not measure.
             "model": s.active_model,
         },
-        "live": s.cortex_provider in ("real", "openai"),
+        "live": s.is_live,
         "pricing": {
             "input_per_mtok": round(p.input_per_mtok, 4),
             "output_per_mtok": round(p.output_per_mtok, 4),
@@ -427,8 +427,7 @@ async def fleet() -> dict[str, Any]:
 async def ablation_results() -> dict[str, Any]:
     store = svc().ledger
     rows = await store.ablation_results() if hasattr(store, "ablation_results") else []
-    return {"results": rows, "provenance": "simulated" if not svc().settings.cortex_provider
-            == "real" else "live"}
+    return {"results": rows, "provenance": "live" if svc().settings.is_live else "simulated"}
 
 
 @router.get("/memories")
