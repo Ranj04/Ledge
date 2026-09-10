@@ -136,8 +136,12 @@ class SnowflakeLedgerStore:
                 # A real run must confirm (1) SCHEMA_MIGRATIONS gains one row for
                 # 0001_initial and a restart adds none, and (2) DESC TABLE CALL_LOG
                 # shows TIER_TOKENS as VARCHAR. The 2026-08-07 tables were created
-                # with it VARIANT and IF NOT EXISTS will not change them; if so,
-                # drop the four tables and restart (D37).
+                # with it VARIANT and every column nullable; IF NOT EXISTS will not
+                # change them, and `apply` reads each table back and raises naming
+                # the columns rather than record a version it did not deliver
+                # (D38). Expect that raise on the trial account; then either drop
+                # the four tables and restart, or keep them and run
+                # `scripts/migrate.py --dialect snowflake --adopt-baseline 0001_initial`.
                 migrate.apply(conn, "snowflake")
 
         await self._run(go)

@@ -974,3 +974,65 @@ The dialect type map is the only place a dialect's type name appears: `text` →
 says so on its first line. Version bookkeeping (`schema_migrations`) is written by
 `migrate.apply`, not by the generated file, so running the file in Snowsight and then starting
 the service is still a no-op on the second step.
+
+### D38 — 2026-09-10 — a migration is recorded only after the table is read back and matches
+
+`CREATE TABLE IF NOT EXISTS` is a no-op on a table that already exists, whatever shape it is
+in. The first version of `migrate.apply` (958ce8c) ran four of them and then inserted
+`0001_initial` into `schema_migrations` regardless. On a database created before versioning
+existed that is a lie the database then repeats forever: the trial Snowflake account's tables
+from 2026-08-07 have `VARIANT TIER_TOKENS`, no `NOT NULL` anywhere and no key on
+`MEMORY_INJECTIONS` (D37); `apply` would have recorded them as the declared schema, and every
+later migration would have built on that. The D37 `# VERIFY-AT-EVENT:` marker said as much —
+a marker is right for what cannot be verified without credentials, wrong for what the code can
+simply refuse to get wrong. Sol filed it as a BLOCKER with a failing test (`.review/t2/1`).
+
+**`apply` now takes no table on trust.** After each CREATE it reads the columns back —
+`PRAGMA table_info` on SQLite, `SHOW TABLES LIKE` + `DESC TABLE` on Snowflake — and compares
+name, type, nullability, key membership and order with the declaration. A version is recorded
+only when every table it declares matches. Three outcomes for a table that already exists:
+
+- **Matches → recorded.** Whoever created it: `sql/01_ddl.sql` run in Snowsight first, or the
+  service before versioning. `data/ledger.db` on this machine is that case, with one wrinkle:
+  its single-column keys were written `call_id TEXT PRIMARY KEY`, which SQLite records as
+  `notnull=0` and will accept a NULL for. A key column counts as NOT NULL on both sides of the
+  comparison — the key is the intent, no writer ever sent a NULL key, and Snowflake makes key
+  columns NOT NULL on its own — so the demo ledger verifies and is recorded truthfully instead
+  of failing at startup.
+- **Every existing column is as declared and some are missing → widened, SQLite only.** The
+  reviewer's test asks for this and it is right to: this system declares whole tables per
+  version, not diffs, so adding a column is the change every future migration will need and
+  the one `IF NOT EXISTS` can never deliver. It is lossless — each existing value lands in a
+  column of the same name and type — and it is done the way SQLite's own documentation
+  prescribes, because `ADD COLUMN` cannot add a `NOT NULL` column without a default: create the
+  declared table beside the old one, copy the shared columns, drop, rename. A populated table
+  gaining a `NOT NULL` column fails the copy and the whole version rolls back.
+- **Anything else → `SchemaMismatch`, nothing recorded.** A type that differs (`VARIANT`), a key
+  or nullability that differs, a column the declaration does not have: that data needs a
+  person. The message names the table, every column and what was found against what was
+  declared, and the two ways out.
+
+**The escape hatch is explicit: `scripts/migrate.py --adopt-baseline VERSION`.** An operator
+who has compared existing tables with the declaration and judged them equivalent for our
+writers records the version without applying it. It prints every difference it is adopting,
+refuses an absent table (then there is nothing to adopt and `apply` is the right tool) and
+refuses a version already on record. `apply` never infers adoption. On the trial account the
+expected event-day sequence is: start the service, watch `apply` raise naming `TIER_TOKENS`
+and the nullable columns, then either drop the four tables and restart or adopt them — the
+`snowflake_store.init_schema` marker says which command.
+
+**Atomicity is per version, and honest about where it holds.** Each version runs in one
+explicit SQLite transaction — DDL, verification, widening and the `schema_migrations` row —
+and any failure rolls all of it back, so a bad index never leaves an unversioned table behind
+(Sol's MAJOR, same review). Snowflake commits every DDL statement on its own and the connector
+autocommits DML by default, so no transaction can make a version atomic there and the code
+does not pretend one does: on failure it says which tables the version created and that
+nothing was recorded. That state is survivable by construction — every CREATE is
+`IF NOT EXISTS` and every table is verified, so a re-run converges — which
+`tests/test_migrations.py` shows against a cursor that behaves like the connector's.
+
+Snowflake-side verification is written and tested against that fake, and has still never
+touched a real account; its `# VERIFY-AT-EVENT:` in `physical_shape` lists the three things a
+real `DESC TABLE` must confirm. The comparison strips the precision from Snowflake's type
+spelling (`VARCHAR(16777216)` → `VARCHAR`), so a precision change would pass; a type change
+would not, which is the divergence D37 actually found.
