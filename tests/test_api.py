@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.service as service_module
-from app.api.main import app
+from app.api.main import WEB_DIST, app
 
 SEED = Path("data/seed/students.json")
 USER = "stu_maya_chen"
@@ -436,3 +436,27 @@ def test_the_ablation_endpoint_and_the_status_endpoint_agree_about_liveness(
 
     assert status["live"] is expected
     assert (ablation["provenance"] == "live") is expected
+
+
+# ---------------------------------------------------------------------------
+# Serving the SPA. Whether the UI appears at all must not depend on the
+# directory `python -m app` was launched from, and the catch-all route must
+# contain its own path rather than rely on the router in front of it.
+# ---------------------------------------------------------------------------
+
+
+def test_web_dist_is_absolute():
+    assert WEB_DIST.is_absolute()
+
+
+@pytest.mark.skipif(not WEB_DIST.exists(), reason="SPA not built")
+async def test_the_spa_route_will_not_serve_a_file_outside_the_dist_directory():
+    """Calls the handler directly, bypassing Starlette's normalisation on purpose.
+
+    Through the router `../` never arrives; this tests *our* containment check,
+    which is what survives a future router change.
+    """
+    from app.api import main
+
+    response = await main.spa("../../requirements.txt")
+    assert Path(response.path).name == "index.html"
