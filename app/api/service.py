@@ -109,8 +109,9 @@ class Service:
     def fleet(self) -> dict:
         return _load_json(FLEET_PATH, {"tenants": []})
 
-    async def memories(self, user_id: str) -> list[Memory]:
-        return await self.everos.all_for_user(user_id=user_id)
+    async def memories(self, tenant_id: str) -> list[Memory]:
+        """Return only rows for the identity established at the HTTP boundary."""
+        return await self.everos.all_for_user(user_id=tenant_id)
 
 
 def _load_json(path: Path, default):

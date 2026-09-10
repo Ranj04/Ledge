@@ -1670,3 +1670,7 @@ h2,
   background: var(--header-bg);
   border-bottom: 1px solid var(--line);
 }
+/* Authentication stays deliberately small: one prompt, persisted locally. */
+.api-key-prompt { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(5, 10, 18, .78); }
+.api-key-prompt form { width: min(24rem, calc(100vw - 2rem)); display: grid; gap: .8rem; padding: 1.4rem; border: 1px solid #445; border-radius: .7rem; background: #101722; }
+.api-key-prompt input { padding: .7rem; }

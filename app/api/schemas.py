@@ -14,6 +14,7 @@ Mode = Literal["naive", "tiered"]
 
 
 class ChatRequest(BaseModel):
+    # Accepted for wire compatibility, but ignored: the credential chooses the tenant.
     user_id: str
     session_id: str
     message: str = Field(min_length=1, max_length=4000)

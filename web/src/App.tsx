@@ -10,6 +10,7 @@ import {
   inspectPrompt,
   streamChat,
 } from './api'
+import { ApiKeyPrompt } from './ApiKeyPrompt'
 import type {
   AblationResponse,
   CacheTierRow,
@@ -659,7 +660,7 @@ function Dashboard({ userId, status }: { userId?: string; status?: Status }) {
     let active = true
     setLoading(true)
     setErrors([])
-    void Promise.allSettled([getMemoryCosts(userId), getMemories(userId), getCacheByTier(), getAblations(), getFleet()]).then((results) => {
+    void Promise.allSettled([getMemoryCosts(), getMemories(), getCacheByTier(), getAblations(), getFleet()]).then((results) => {
       if (!active) return
       const failures: string[] = []
       const setters = [setCosts, setMemories, setCacheRows, setAblations, setFleet] as Array<(value: never) => void>
@@ -802,6 +803,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <ApiKeyPrompt />
       <header className="app-header">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">ML</span>

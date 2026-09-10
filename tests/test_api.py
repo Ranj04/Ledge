@@ -29,11 +29,21 @@ def client(tmp_path, monkeypatch):
     from app.config import get_settings, reset_settings_cache
 
     monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "ledger.db"))
+    monkeypatch.setenv(
+        "API_KEYS", "maya-key:stu_maya_chen,liam-key:stu_liam_ortiz,admin-key:*"
+    )
     reset_settings_cache()
     service_module._service = None
     get_settings()
 
     with TestClient(app) as test_client:
+        test_client.headers["X-API-Key"] = "maya-key"
+
+        def authenticate_admin_routes(request):
+            if request.url.path in {"/api/ledger/calls", "/api/ledger/ablation"}:
+                request.headers["X-API-Key"] = "admin-key"
+
+        test_client.event_hooks["request"].append(authenticate_admin_routes)
         yield test_client
 
     service_module._service = None
@@ -346,11 +356,13 @@ def test_inspect_does_not_disturb_the_live_session(client):
 def test_a_session_id_reused_by_another_user_starts_clean(client):
     """Sessions were keyed by id alone, so the same id from a second user
     inherited the first user's history, cache namespace and running totals —
-    a context leak and wrong per-session accounting at the same time."""
+    a context leak and wrong per-session accounting at the same time. Tenancy
+    now comes from the API key."""
     send(client, "help with limiting reagents", session="shared")
     second = client.stream(
         "POST",
         "/api/chat",
+        headers={"X-API-Key": "liam-key"},
         json={"user_id": "stu_liam_ortiz", "session_id": "shared",
               "message": "help with quadratics", "mode": "tiered"},
     )
@@ -370,6 +382,21 @@ def test_a_session_id_reused_by_another_user_starts_clean(client):
     from app.api.service import get_service
 
     assert get_service().sessions["shared"].user_id == "stu_liam_ortiz"
+
+
+def test_a_body_user_id_cannot_reassign_a_session(client):
+    send(client, "help with limiting reagents", session="body-forgery")
+    with client.stream(
+        "POST",
+        "/api/chat",
+        json={"user_id": "stu_liam_ortiz", "session_id": "body-forgery",
+              "message": "and percent yield", "mode": "tiered"},
+    ) as response:
+        assert response.status_code == 200
+
+    from app.api.service import get_service
+
+    assert get_service().sessions["body-forgery"].user_id == USER
 
 
 def test_inspect_does_not_advance_the_live_tier_registry(client):
