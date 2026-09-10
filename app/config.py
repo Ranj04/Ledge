@@ -156,6 +156,17 @@ class Settings:
         return self.openai_model if self.cortex_provider == "openai" else self.cortex_model
 
     @property
+    def is_live(self) -> bool:
+        """True when inference goes to a real provider rather than the simulator.
+
+        Three sites needed this predicate and two of them agreed; the third
+        (routes.py ablation provenance) evaluated `openai` as simulated and put
+        'scored against the simulator' on screen after a live run. One definition,
+        so they cannot drift apart again.
+        """
+        return self.cortex_provider in ("real", "openai")
+
+    @property
     def pricing(self) -> Pricing:
         return Pricing(model=self.active_model)
 

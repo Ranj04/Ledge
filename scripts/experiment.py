@@ -333,9 +333,7 @@ async def main() -> int:
             "everos": settings.everos_provider,
             "model": settings.active_model,
         },
-        "measurement": (
-            "live" if settings.cortex_provider in ("real", "openai") else "simulated"
-        ),
+        "measurement": "live" if settings.is_live else "simulated",
         "conversations": [c["conversation_id"] for c in conversations],
         "turns": sum(len(c["turns"]) for c in conversations),
         "runs_per_conversation": args.runs,
@@ -420,7 +418,8 @@ async def main() -> int:
         )
     else:
         spend = sum(r.cost_usd for mode in MODES for r in results[mode])
-        billed = "BILLED" if settings.cortex_provider == "openai" else "not billed — simulators"
+        # Cortex credits were handled above; anything else live bills in dollars.
+        billed = "BILLED" if settings.is_live else "not billed — simulators"
         print(f"  sweep spend  ${spend:.4f}   {swept_tokens:,} tok   [{billed}]")
     print(f"  prompt size   naive {payload['input_tokens_mean']['naive']:,.0f} tok   "
           f"tiered {payload['input_tokens_mean']['tiered']:,.0f} tok   "
@@ -431,14 +430,30 @@ async def main() -> int:
         print(f"    {cid:24s} naive ${row['naive_mean']:.6f}  "
               f"tiered ${row['tiered_mean']:.6f}  −{row['reduction']:.1%}")
 
-    if settings.cortex_provider != "real" and delta_stats["stdev"] == 0.0:
+    # Zero stdev means something different depending on where the usage came
+    # from, and the note must say which. `Settings.is_live` is the only place
+    # that knows which providers are real; a `!= "real"` here once told an
+    # operator who had just paid OpenAI that they were on the simulator.
+    if not settings.is_live and delta_stats["stdev"] == 0.0:
         print()
         print("  Note: repeated runs of the same conversation against the simulator are")
         print("  bit-for-bit identical, so within-conversation stdev is zero by")
         print("  construction — that is a property of a deterministic simulator, not a")
         print("  claim about stability. The spread above is across conversations, which")
-        print("  is where the variance genuinely lives. Re-run with CORTEX_PROVIDER=real")
+        print("  is where the variance genuinely lives. Re-run with CORTEX_PROVIDER=openai")
         print("  for a distribution that includes real sampling variation.")
+    elif delta_stats["stdev"] == 0.0:
+        print()
+        if total_runs == 1:
+            print("  Note: one run per mode, so stdev is zero by arithmetic. This is a")
+            print("  single live sample, not a distribution — raise --runs for a spread")
+            print("  that includes real sampling variation.")
+        else:
+            print(f"  Note: all {total_runs} live runs reported the same input-side")
+            print("  reduction, so stdev is zero. Those are the provider's own usage")
+            print("  figures agreeing run to run, not a simulator artefact — but check")
+            print("  that the runs were independent (fresh session ids, no warm cache)")
+            print("  before reading it as stability.")
     print()
     return 0
 

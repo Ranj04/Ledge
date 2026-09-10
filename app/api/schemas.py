@@ -25,8 +25,3 @@ class InspectRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     session_id: str = "inspect"
 
-
-class AblationRequest(BaseModel):
-    user_id: str
-    memory_ids: list[str] | None = None
-    sample: int = 12

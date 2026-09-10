@@ -8,13 +8,14 @@ the cost" is something the build checks rather than something we hope for at
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 import app.api.service as service_module
-from app.api.main import app
+from app.api.main import WEB_DIST, app
 
 SEED = Path("data/seed/students.json")
 USER = "stu_maya_chen"
@@ -390,3 +391,96 @@ def test_inspect_does_not_advance_the_live_tier_registry(client):
 
     after = {s.memory_id: (s.stable_calls, s.tier) for s in registry.states()}
     assert after == before, "the dry run changed the state it was previewing"
+
+
+# ---------------------------------------------------------------------------
+# Liveness. One predicate, so the status chip and the ablation banner cannot
+# disagree about whether a run went to a real model.
+# ---------------------------------------------------------------------------
+
+PROVIDERS = [("sim", False), ("openai", True), ("real", True)]
+
+
+@pytest.mark.parametrize(("provider", "expected"), PROVIDERS)
+def test_every_live_provider_is_reported_as_live(provider, expected):
+    """`openai` is the production inference path and must read as live.
+
+    Before `Settings.is_live` existed the ablation route evaluated it as
+    simulated and put "scored against the simulator" on screen after a run
+    against a real model. Calls the property directly: no HTTP, no credentials.
+    """
+    import dataclasses
+
+    from app.config import get_settings
+
+    settings = dataclasses.replace(get_settings(), cortex_provider=provider)
+    assert settings.is_live is expected
+
+
+@pytest.mark.parametrize(("provider", "expected"), PROVIDERS)
+def test_the_ablation_endpoint_and_the_status_endpoint_agree_about_liveness(
+    client, monkeypatch, provider, expected
+):
+    """Through the real routes, not a restatement of the expression.
+
+    Only the settings object the routes read is swapped; the inference client
+    behind them is still the simulator, so no provider is contacted.
+    """
+    import dataclasses
+
+    live_settings = dataclasses.replace(service_module.get_service().settings,
+                                        cortex_provider=provider)
+    monkeypatch.setattr(service_module.get_service(), "settings", live_settings)
+
+    status = client.get("/api/status").json()
+    ablation = client.get("/api/ledger/ablation").json()
+
+    assert status["live"] is expected
+    assert (ablation["provenance"] == "live") is expected
+
+
+REPO = Path(__file__).resolve().parent.parent
+LIVENESS_CALLERS = [
+    REPO / "scripts" / "experiment.py",
+    *sorted((REPO / "app" / "api").glob("*.py")),
+]
+
+
+@pytest.mark.parametrize("path", LIVENESS_CALLERS, ids=lambda p: p.name)
+def test_no_cortex_provider_comparison_outside_config_decides_liveness(path):
+    """Round-2 finding F1: `cortex_provider != "real"` in experiment.py told an
+    operator who had just run against OpenAI that they were on a deterministic
+    simulator. The grep that was supposed to catch it looked for `==` and `in`
+    and missed `!=`. So this matches every comparison operator and allows
+    exactly one outside config.py: `== "real"`, the Cortex-credit accounting
+    switch (only Cortex bills in Snowflake credits) — billing, not liveness.
+    Everything else must go through `Settings.is_live`.
+    """
+    source = path.read_text(encoding="utf-8")
+    comparisons = re.findall(r"cortex_provider\s*(?:==|!=|not\s+in\b|in\b)[^\n]*", source)
+    offending = [c for c in comparisons if not re.fullmatch(r'cortex_provider == "real",?', c)]
+    assert offending == [], f"{path.name} decides liveness by string comparison: {offending}"
+
+
+# ---------------------------------------------------------------------------
+# Serving the SPA. Whether the UI appears at all must not depend on the
+# directory `python -m app` was launched from, and the catch-all route must
+# contain its own path rather than rely on the router in front of it.
+# ---------------------------------------------------------------------------
+
+
+def test_web_dist_is_absolute():
+    assert WEB_DIST.is_absolute()
+
+
+@pytest.mark.skipif(not WEB_DIST.exists(), reason="SPA not built")
+async def test_the_spa_route_will_not_serve_a_file_outside_the_dist_directory():
+    """Calls the handler directly, bypassing Starlette's normalisation on purpose.
+
+    Through the router `../` never arrives; this tests *our* containment check,
+    which is what survives a future router change.
+    """
+    from app.api import main
+
+    response = await main.spa("../../requirements.txt")
+    assert Path(response.path).name == "index.html"
