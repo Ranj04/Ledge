@@ -35,6 +35,7 @@ logger = logging.getLogger("memoryledger")
 Authenticated = Annotated[Principal, Depends(auth.resolve)]
 
 router = APIRouter(prefix="/api")
+MAX_OUTPUT_TOKENS = 960
 
 
 def svc() -> Service:
@@ -84,17 +85,18 @@ async def status() -> dict[str, Any]:
 async def students(principal: Authenticated) -> list[dict[str, Any]]:
     rows = svc().students()
     return (
-        rows
-        if principal.admin
-        else [row for row in rows if row["user_id"] == principal.tenant_id]
+        rows if principal.admin else [row for row in rows if row["user_id"] == principal.tenant_id]
     )
 
 
 @router.get("/starters")
 async def starters(principal: Authenticated) -> list[dict[str, Any]]:
     return [
-        {"conversation_id": c["conversation_id"], "title": c.get("title", ""),
-         "turns": c.get("turns", [])}
+        {
+            "conversation_id": c["conversation_id"],
+            "title": c.get("title", ""),
+            "turns": c.get("turns", []),
+        }
         for c in svc().conversations(None if principal.admin else principal.tenant_id)
     ]
 
@@ -133,14 +135,16 @@ async def chat(
         registry=session.registry,
         session_id=req.session_id,
     )
-    # Reserve measured prompt-side spend before entering model generation.
+    # Reserve the bounded worst case before entering model generation. Every
+    # prompt token could be a cache write; output is explicitly capped below.
+    pricing = service.settings.pricing
     estimate = (
-        prompt.total_prompt_tokens_estimate()
-        * service.settings.pricing.input_per_mtok
-        / 1e6
-    )
+        prompt.total_prompt_tokens_estimate() * pricing.cache_write_per_mtok
+        + MAX_OUTPUT_TOKENS * pricing.output_per_mtok
+    ) / 1e6
+    minimum_estimate = prompt.total_prompt_tokens_estimate() * pricing.input_per_mtok / 1e6
     limiter: SpendCeiling = request.app.state.spend_ceiling
-    reservation_id = await limiter.reserve(principal, estimate)
+    reservation_id = await limiter.reserve(principal, estimate, minimum_estimate)
     captured_request_id = request_id_var.get()
 
     async def generate() -> AsyncIterator[str]:
@@ -150,7 +154,12 @@ async def chat(
         latency_ms = 0.0
 
         try:
-            async for event in service.cortex.stream(prompt, session_id=req.session_id):
+            provider_session_id = service.provider_session_id(user_id, req.session_id)
+            async for event in service.cortex.stream(
+                prompt,
+                session_id=provider_session_id,
+                max_tokens=MAX_OUTPUT_TOKENS,
+            ):
                 if event.kind == "text":
                     text_parts.append(event.text)
                     yield _sse("text", {"text": event.text})
@@ -158,14 +167,20 @@ async def chat(
                     usage = event.result.usage
                     latency_ms = event.result.latency_ms
                 elif event.kind == "error":
+                    await limiter.reconcile(principal, reservation_id, 0.0)
                     yield _sse("error", {"detail": event.text})
                     return
-        except Exception as exc:  # a provider failure must not hang the browser
+        except BaseException as exc:
+            await limiter.reconcile(principal, reservation_id, 0.0)
+            if not isinstance(exc, Exception):
+                raise
+            # A provider failure must not hang the browser.
             logger.exception("provider stream failed")
             yield _sse("error", {"detail": f"{type(exc).__name__}: {exc}"})
             return
 
         if usage is None:
+            await limiter.reconcile(principal, reservation_id, 0.0)
             yield _sse("error", {"detail": "provider returned no usage"})
             return
 
@@ -200,10 +215,18 @@ async def chat(
 
         # Everything below this line happens after the browser has the answer.
         background.add_task(
-            _persist, service, call, injections, req, memories, user_id,
-            limiter, principal, reservation_id, captured_request_id,
+            _persist,
+            service,
+            call,
+            injections,
+            req,
+            memories,
+            user_id,
+            limiter,
+            principal,
+            reservation_id,
+            captured_request_id,
         )
-
         yield _sse("done", _done_payload(call, prompt, usage, session.totals()))
 
     return StreamingResponse(
@@ -258,7 +281,7 @@ async def _persist(
             extra={"call_id": call.call_id, "request_id": captured_request_id},
         )
 
-        session = service.sessions.get(req.session_id)
+        session = service.sessions.get((user_id, req.session_id))
         if session is None:
             return
 
@@ -301,9 +324,7 @@ async def _persist(
 
 
 @router.post("/inspect")
-async def inspect(
-    req: InspectRequest, principal: Authenticated
-) -> dict[str, Any]:
+async def inspect(req: InspectRequest, principal: Authenticated) -> dict[str, Any]:
     """Dry run: build both layouts for the same message and the same memory set.
 
     Deliberately does not touch the live session's cache or the ledger — an
@@ -320,9 +341,11 @@ async def inspect(
     # objects meant three inspector calls could promote a memory into a cached
     # tier without a single model call ever happening — the dry run silently
     # changing the thing it claims to be previewing.
-    live = service.sessions.get(req.session_id)
-    registry = live.registry.snapshot() if live is not None else TierRegistry(
-        stability_n=service.settings.promotion_stability_n
+    live = service.sessions.get((principal.tenant_id, req.session_id))
+    registry = (
+        live.registry.snapshot()
+        if live is not None
+        else TierRegistry(stability_n=service.settings.promotion_stability_n)
     )
 
     out = {}
@@ -340,9 +363,7 @@ async def inspect(
     return {
         "message": req.message,
         "memory_count": len(memories),
-        "tiers": {
-            str(t): {"name": TIER_NAMES[t], "source": TIER_SOURCE[t]} for t in (0, 1, 2, 3)
-        },
+        "tiers": {str(t): {"name": TIER_NAMES[t], "source": TIER_SOURCE[t]} for t in (0, 1, 2, 3)},
         "modes": out,
     }
 
@@ -351,11 +372,13 @@ def _message_label(role: str, carries: list[int]) -> str:
     if not carries:
         return f"{role} message"
     names = " + ".join(TIER_NAMES[t] for t in carries)
-    span = "–".join(str(t) for t in (carries[0], carries[-1])) if len(carries) > 1 else str(
-        carries[0]
+    span = (
+        "–".join(str(t) for t in (carries[0], carries[-1])) if len(carries) > 1 else str(carries[0])
     )
-    return f"Tiers {span} + question · {names}" if len(carries) > 1 else (
-        f"Tier {span} + question · {names}"
+    return (
+        f"Tiers {span} + question · {names}"
+        if len(carries) > 1
+        else (f"Tier {span} + question · {names}")
     )
 
 
@@ -396,9 +419,7 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
     messages = []
     for msg in prompt.messages:
         content = msg["content"]
-        parts = (
-            [{"text": content}] if isinstance(content, str) else content
-        )
+        parts = [{"text": content}] if isinstance(content, str) else content
         for j, part in enumerate(parts):
             # Count exactly what `flatten_prompt` bills, role marker included —
             # the inspector must not display a total the simulator disagrees
@@ -446,33 +467,31 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
 
 
 @router.get("/session/{session_id}/summary")
-async def session_summary(
-    session_id: str, principal: Authenticated
-) -> dict[str, Any]:
-    session = svc().sessions.get(session_id)
+async def session_summary(session_id: str, principal: Authenticated) -> dict[str, Any]:
+    session = svc().sessions.get((principal.tenant_id, session_id))
     if not principal.admin and (session is None or session.user_id != principal.tenant_id):
         raise HTTPException(403, "session belongs to another tenant")
-    return await svc().ledger.call_summary(session_id=session_id)
+    return await svc().ledger.call_summary(
+        session_id=session_id,
+        user_id=None if principal.admin else principal.tenant_id,
+    )
 
 
 @router.post("/session/{session_id}/reset")
-async def session_reset(
-    session_id: str, principal: Authenticated
-) -> dict[str, str]:
+async def session_reset(session_id: str, principal: Authenticated) -> dict[str, str]:
     service = svc()
-    session = service.sessions.get(session_id)
+    key = (principal.tenant_id, session_id)
+    session = service.sessions.get(key)
     if not principal.admin and (session is None or session.user_id != principal.tenant_id):
         raise HTTPException(403, "session belongs to another tenant")
-    service.sessions.pop(session_id, None)
+    service.sessions.pop(key, None)
     if hasattr(service.cortex, "reset"):
-        service.cortex.reset(session_id)
+        service.cortex.reset(service.provider_session_id(principal.tenant_id, session_id))
     return {"status": "reset", "session_id": session_id}
 
 
 @router.get("/ledger/memory-costs")
-async def memory_costs(
-    principal: Authenticated, days: int = 30
-) -> list[dict[str, Any]]:
+async def memory_costs(principal: Authenticated, days: int = 30) -> list[dict[str, Any]]:
     return await svc().ledger.memory_costs(user_id=principal.tenant_id, days=days)
 
 
@@ -490,9 +509,7 @@ async def cache_by_tier(principal: Authenticated) -> list[dict[str, Any]]:
 
 
 @router.get("/ledger/calls")
-async def recent_calls(
-    principal: Authenticated, limit: int = 50
-) -> list[dict[str, Any]]:
+async def recent_calls(principal: Authenticated, limit: int = 50) -> list[dict[str, Any]]:
     if not principal.admin:
         raise HTTPException(403, "admin key required")
     return await svc().ledger.recent_calls(limit=limit)

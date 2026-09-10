@@ -34,6 +34,8 @@ def parse_keys(raw: str) -> dict[str, Principal]:
         if not token or not tenant:
             raise ValueError("API_KEYS tokens and tenants must not be empty")
         digest = hashlib.sha256(token.encode()).hexdigest()
+        if digest in principals:
+            raise ValueError("API_KEYS tokens must be unique")
         principals[digest] = Principal(tenant, tenant == "*", digest[:8])
     return principals
 

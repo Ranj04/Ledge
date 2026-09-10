@@ -69,7 +69,12 @@ export async function streamChat(
 ) {
   const response = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(localStorage.getItem('memoryledger-api-key')
+        ? { 'X-API-Key': localStorage.getItem('memoryledger-api-key') as string }
+        : {}),
+    },
     body: JSON.stringify(body),
   })
 

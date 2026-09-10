@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,6 +27,9 @@ from app.logging_setup import configure, request_id_var
 WEB_DIST = Path(
     os.environ.get("WEB_DIST", Path(__file__).resolve().parent.parent.parent / "web" / "dist")
 ).resolve()
+
+_READY_TTL_SECONDS = 5.0
+_ready_cache: tuple[int, float, dict[str, str], int] | None = None
 
 
 @asynccontextmanager
@@ -81,14 +85,25 @@ async def health() -> dict[str, str]:
 
 @app.get("/ready")
 async def ready():
+    global _ready_cache
+    service = get_service()
+    now = time.monotonic()
+    if (
+        _ready_cache is not None
+        and _ready_cache[0] == id(service)
+        and now - _ready_cache[1] < _READY_TTL_SECONDS
+    ):
+        return JSONResponse(_ready_cache[2], status_code=_ready_cache[3])
+
     checks: dict[str, str] = {}
     try:
-        service = get_service()
         checks["everos"] = "ok" if service.everos is not None else "unavailable"
     except Exception as exc:
         checks["everos"] = type(exc).__name__
     try:
-        await get_service().ledger.init_schema()
+        # Startup owns schema creation. Readiness only proves that the already
+        # initialized ledger can answer a cheap read without mutating it.
+        await service.ledger.call_summary()
         checks["ledger"] = "ok"
     except Exception as exc:
         checks["ledger"] = type(exc).__name__
@@ -98,10 +113,9 @@ async def ready():
     except Exception as exc:
         checks["tokenizer"] = type(exc).__name__
     status_code = 200 if all(value == "ok" for value in checks.values()) else 503
-    return JSONResponse(
-        {"status": "ready" if status_code == 200 else "not ready", "checks": checks},
-        status_code=status_code,
-    )
+    payload = {"status": "ready" if status_code == 200 else "not ready", "checks": checks}
+    _ready_cache = (id(service), now, payload, status_code)
+    return JSONResponse(payload, status_code=status_code)
 
 
 if WEB_DIST.exists():

@@ -151,14 +151,14 @@ class Settings:
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", "INFO"))
 
     # Track P, phase 2: per-principal HTTP request and spend limits.
-    rate_limit_per_minute: int = field(  # RATE_LIMIT_PER_MINUTE
-        default_factory=lambda: _env_int("RATE_LIMIT_" "PER_MINUTE", 60)
+    rate_limit_per_minute: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_PER_MINUTE", 60)
     )
-    spend_ceiling_usd: float = field(  # SPEND_CEILING_USD
-        default_factory=lambda: float(_env("SPEND_CEILING_" "USD", "5.00"))
+    spend_ceiling_usd: float = field(
+        default_factory=lambda: float(_env("SPEND_CEILING_USD", "5.00"))
     )
-    spend_window_hours: int = field(  # SPEND_WINDOW_HOURS
-        default_factory=lambda: _env_int("SPEND_WINDOW_" "HOURS", 24)
+    spend_window_hours: int = field(
+        default_factory=lambda: _env_int("SPEND_WINDOW_HOURS", 24)
     )
 
     @property

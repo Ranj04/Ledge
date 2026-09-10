@@ -19,9 +19,10 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.auth import Principal, principal_for_key
+from app.api.service import get_service
 from app.config import get_settings
 
-OPEN_PATHS = {"/health", "/ready", "/api/status"}
+OPEN_PATHS = {"/api/status"}
 
 
 def _principal(request) -> Principal:
@@ -33,33 +34,32 @@ def _principal(request) -> Principal:
 class RateLimiter(BaseHTTPMiddleware):
     def __init__(self, app, per_minute: int | None = None) -> None:
         super().__init__(app)
-        self.per_minute = per_minute or get_settings().rate_limit_per_minute
-        self._buckets: dict[str, tuple[float, float]] = {}
+        self.per_minute = get_settings().rate_limit_per_minute if per_minute is None else per_minute
+        self._buckets: dict[tuple[int, str], tuple[float, float]] = {}
         self._lock = asyncio.Lock()
 
     async def dispatch(self, request, call_next):
-        if request.url.path in OPEN_PATHS or request.url.path.startswith("/assets/"):
+        if not request.url.path.startswith("/api/") or request.url.path in OPEN_PATHS:
             return await call_next(request)
         try:
             principal = _principal(request)
         except HTTPException as exc:
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
         now = time.monotonic()
+        bucket_key = (id(get_service()), principal.key_id)
         async with self._lock:
-            tokens, updated = self._buckets.get(
-                principal.key_id, (float(self.per_minute), now)
-            )
+            tokens, updated = self._buckets.get(bucket_key, (float(self.per_minute), now))
             rate = self.per_minute / 60.0
             tokens = min(float(self.per_minute), tokens + (now - updated) * rate)
             if tokens < 1:
-                retry = max(1, math.ceil((1 - tokens) / rate))
-                self._buckets[principal.key_id] = (tokens, now)
+                retry = 60 if rate <= 0 else max(1, math.ceil((1 - tokens) / rate))
+                self._buckets[bucket_key] = (tokens, now)
                 return JSONResponse(
                     {"detail": "rate limit exceeded"},
                     status_code=429,
                     headers={"Retry-After": str(retry)},
                 )
-            self._buckets[principal.key_id] = (tokens - 1, now)
+            self._buckets[bucket_key] = (tokens - 1, now)
         return await call_next(request)
 
 
@@ -68,6 +68,7 @@ class _Spend:
     reservation_id: str
     timestamp: float
     amount: float
+    measured: bool = False
 
 
 class SpendCeiling(BaseHTTPMiddleware):
@@ -76,8 +77,9 @@ class SpendCeiling(BaseHTTPMiddleware):
     ) -> None:
         super().__init__(app)
         settings = get_settings()
-        self.ceiling_usd = ceiling_usd or settings.spend_ceiling_usd
-        self.window_seconds = (window_hours or settings.spend_window_hours) * 3600
+        self.ceiling_usd = settings.spend_ceiling_usd if ceiling_usd is None else ceiling_usd
+        hours = settings.spend_window_hours if window_hours is None else window_hours
+        self.window_seconds = hours * 3600
         self._spend: dict[str, deque[_Spend]] = defaultdict(deque)
         self._lock = asyncio.Lock()
 
@@ -91,24 +93,37 @@ class SpendCeiling(BaseHTTPMiddleware):
             entries.popleft()
         return entries
 
-    async def reserve(self, principal: Principal, estimate: float) -> str:
+    async def reserve(
+        self, principal: Principal, estimate: float, minimum_estimate: float | None = None
+    ) -> str:
         now = time.time()
         async with self._lock:
             entries = self._prune(principal.key_id, now)
             total = sum(entry.amount for entry in entries)
-            if total + estimate > self.ceiling_usd:
+            # A ceiling below the bounded maximum but above the known input cost
+            # may admit one call; reserving all remaining capacity still prevents
+            # concurrent calls from multiplying that bounded uncertainty.
+            reserved = estimate
+            if (
+                not entries
+                and minimum_estimate is not None
+                and minimum_estimate <= self.ceiling_usd < estimate
+            ):
+                reserved = self.ceiling_usd
+            if total + reserved > self.ceiling_usd:
                 rolloff = entries[0].timestamp + self.window_seconds if entries else now
                 stamp = datetime.fromtimestamp(rolloff, UTC).isoformat().replace("+00:00", "Z")
+                measured_total = sum(entry.amount for entry in entries if entry.measured)
                 raise HTTPException(
                     402,
                     detail={
                         "ceiling_usd": self.ceiling_usd,
-                        "current_total_usd": total,
+                        "measured_total_usd": measured_total,
                         "window_rolls_off_at": stamp,
                     },
                 )
             reservation_id = uuid.uuid4().hex
-            entries.append(_Spend(reservation_id, now, estimate))
+            entries.append(_Spend(reservation_id, now, reserved))
             return reservation_id
 
     async def reconcile(self, principal: Principal, reservation_id: str, actual: float) -> None:
@@ -116,4 +131,5 @@ class SpendCeiling(BaseHTTPMiddleware):
             for entry in self._spend[principal.key_id]:
                 if entry.reservation_id == reservation_id:
                     entry.amount = actual
+                    entry.measured = True
                     return
