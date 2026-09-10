@@ -17,3 +17,6 @@ data/*.sqlite
 *.egg-info/
 .coverage
 htmlcov/
+.review/
+_protocol/
+MemoryLedger-EXECUTE.md
