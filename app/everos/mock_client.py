@@ -103,20 +103,21 @@ class MockEverOSClient:
         user_id: str,
         query: str,
         session_id: str | None = None,
-        limit: int = 20,
+        limit: int | None = None,
     ) -> list[Memory]:
         pool = self._by_user.get(user_id, [])
-        selected: list[Memory] = []
+        always_injected: list[Memory] = []
 
         for memory in pool:
             score = lexical_score(query, memory.content)
             if memory.memory_type in ALWAYS_INJECTED:
                 # Always injected.  Score is still computed so the naive
                 # baseline has a real relevance ordering to sort by.
-                selected.append(_scored(memory, score))
+                always_injected.append(_scored(memory, score))
 
         # Each retrieved type gets its own budget, so no type can starve
         # another out of the prompt.
+        conditional: list[Memory] = []
         for memory_type, budget in TOP_K.items():
             candidates = [
                 _scored(m, lexical_score(query, m.content))
@@ -127,9 +128,18 @@ class MockEverOSClient:
                 candidates.sort(key=lambda m: (m.updated_at or "", m.score), reverse=True)
             else:
                 candidates.sort(key=lambda m: (-m.score, m.memory_id))
-            selected.extend(candidates[:budget])
+            conditional.extend(candidates[:budget])
 
-        return selected
+        # `limit` is the caller's ceiling on CONDITIONAL retrieval, matching
+        # real_client.py's `top_k`. Always-injected memories are not retrieved --
+        # they are policy (DECISIONS.md D12) -- so they are not subject to it.
+        # Applying it to them would let a small `limit` silently drop the agent's
+        # own instructions, which is the failure this simulator exists to expose.
+        if limit is not None:
+            conditional.sort(key=lambda memory: (-memory.score, memory.memory_id))
+            conditional = conditional[:limit]
+
+        return always_injected + conditional
 
     async def write(
         self,
