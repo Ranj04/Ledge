@@ -39,6 +39,7 @@ VIRTUAL_ENV=.venv uv pip install -r requirements.txt
 cd web && npm install && npm run build && cd ..
 .venv/bin/python -m app
 ```
+Snowflake and the embedding scorer are optional: `pip install -r requirements-snowflake.txt`
 
 Open <http://localhost:8000>. No credentials needed — it runs against faithful simulators.
 

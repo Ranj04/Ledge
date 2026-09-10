@@ -1,0 +1,10 @@
+# Optional. Only needed with LEDGER_PROVIDER=snowflake or ABLATION_SCORER=embedding.
+# Kept out of requirements.txt because snowflake-connector-python 3.12.4 pins
+# pyOpenSSL<25, which is unsatisfiable against a modern cryptography, and the
+# simulator path -- the documented default -- never imports it.
+#
+# Floor is 4.4.0: the first release whose pyOpenSSL range is open-ended
+# (>=24.0.0, no cap). Everything from 3.12.4 through 4.3.0 caps pyOpenSSL at
+# <25 or <26, and an older pyOpenSSL against a current cryptography fails at
+# import with a missing X509_V_FLAG_NOTIFY_POLICY. Resolved to 4.7.3 on 2026-09-10.
+snowflake-connector-python>=4.4
