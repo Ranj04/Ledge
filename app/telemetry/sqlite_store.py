@@ -1,9 +1,12 @@
 """SQLite ledger.
 
-Same four tables as the Snowflake DDL in `sql/01_ddl.sql`, same column names,
-so a query written against one reads against the other. This is the store the
-demo runs on; `SnowflakeLedgerStore` is the same interface against the real
-warehouse.
+Same four tables as `SnowflakeLedgerStore`, same column names in the same order:
+both stores create their schema through `app/telemetry/migrate.py` from the one
+declaration in `migrations/`, and
+`tests/test_migrations.py::test_both_dialects_declare_the_same_columns_in_the_same_order`
+asserts the two renderings agree — so a query written against one reads against
+the other. This is the store the demo runs on; `SnowflakeLedgerStore` is the same
+interface against the real warehouse.
 
 Writes go through a thread so an fsync never lands in the request path.
 """
@@ -19,74 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from app.contracts import CallRecord, InjectionRecord
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS call_log (
-    call_id             TEXT PRIMARY KEY,
-    session_id          TEXT NOT NULL,
-    user_id             TEXT NOT NULL,
-    ts                  TEXT NOT NULL,
-    mode                TEXT NOT NULL,
-    model               TEXT,
-    input_tokens        INTEGER NOT NULL,
-    output_tokens       INTEGER NOT NULL,
-    cached_tokens       INTEGER NOT NULL,
-    cache_write_tokens  INTEGER NOT NULL,
-    cost_usd            REAL NOT NULL,
-    cost_uncached_usd   REAL NOT NULL,
-    cost_cached_usd     REAL NOT NULL,
-    cost_write_usd      REAL NOT NULL,
-    cost_output_usd     REAL NOT NULL,
-    latency_ms          REAL,
-    breakpoint_count    INTEGER,
-    tier_tokens         TEXT,
-    baseline_cost_usd   REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS memory_injections (
-    call_id             TEXT NOT NULL,
-    memory_id           TEXT NOT NULL,
-    user_id             TEXT NOT NULL,
-    ts                  TEXT NOT NULL,
-    tier                INTEGER NOT NULL,
-    memory_type         TEXT NOT NULL,
-    tokens              INTEGER NOT NULL,
-    was_cached          INTEGER NOT NULL,
-    attributed_cost_usd REAL NOT NULL,
-    PRIMARY KEY (call_id, memory_id)
-);
-
-CREATE TABLE IF NOT EXISTS memory_registry (
-    memory_id           TEXT PRIMARY KEY,
-    user_id             TEXT NOT NULL,
-    memory_type         TEXT NOT NULL,
-    content_hash        TEXT NOT NULL,
-    tier                INTEGER NOT NULL,
-    stable_calls        INTEGER NOT NULL,
-    tokens              INTEGER NOT NULL,
-    first_seen          TEXT NOT NULL,
-    last_seen           TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ablation_results (
-    ablation_id         TEXT PRIMARY KEY,
-    memory_id           TEXT NOT NULL,
-    user_id             TEXT NOT NULL,
-    ts                  TEXT NOT NULL,
-    prompt              TEXT,
-    baseline_answer     TEXT,
-    ablated_answer      TEXT,
-    similarity          REAL,
-    verdict             TEXT,
-    tokens_saved        INTEGER,
-    monthly_cost_usd    REAL
-);
-
-CREATE INDEX IF NOT EXISTS ix_calls_session ON call_log (session_id, ts);
-CREATE INDEX IF NOT EXISTS ix_calls_user ON call_log (user_id, ts);
-CREATE INDEX IF NOT EXISTS ix_inj_memory ON memory_injections (memory_id, ts);
-CREATE INDEX IF NOT EXISTS ix_inj_user ON memory_injections (user_id, ts);
-"""
+from app.telemetry import migrate
 
 
 class SqliteLedgerStore:
@@ -109,7 +45,7 @@ class SqliteLedgerStore:
     async def init_schema(self) -> None:
         def go():
             with self._connect() as conn:
-                conn.executescript(SCHEMA)
+                migrate.apply(conn, "sqlite")
 
         await self._run(go)
 
