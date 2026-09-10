@@ -41,6 +41,16 @@ cd web && npm install && npm run build && cd ..
 ```
 Snowflake and the embedding scorer are optional: `pip install -r requirements-snowflake.txt`
 
+**Offline.** The token counter needs the `cl100k_base` BPE table, which tiktoken downloads once on
+first use — pre-fetch it on a machine with network access:
+
+```bash
+python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+```
+
+`TIKTOKEN_CACHE_DIR` can point at a directory that already holds the blob; everything else in
+this repo runs with no network and no credentials.
+
 Open <http://localhost:8000>. No credentials needed — it runs against faithful simulators.
 
 For the real memory layer, EverOS runs self-hosted alongside (free, no per-operation charge, and
