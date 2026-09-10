@@ -60,9 +60,12 @@ async def main() -> None:
         )
         return
 
-    headers = ("memory id", "type", "monthly", "similarity", "reason")
+    headers = ("memory id", "type", "monthly", "similarity", "probes", "reason")
     rows = [
-        (p.memory_id, p.memory_type, f"${p.monthly_cost_usd:.2f}", f"{p.similarity:.4f}", p.reason)
+        (
+            p.memory_id, p.memory_type, f"${p.monthly_cost_usd:.2f}", f"{p.similarity:.4f}",
+            "n/a" if p.probes_tested is None else str(p.probes_tested), p.reason,
+        )
         for p in proposals
     ]
     widths = [max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(len(headers))]

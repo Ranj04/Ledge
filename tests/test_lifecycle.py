@@ -144,3 +144,70 @@ async def test_an_identical_episode_within_the_window_is_not_written_twice(tmp_p
     # Window elapsed: written again.
     later = NOW + timedelta(minutes=31)
     assert await lifecycle.should_write_episode(store, USER, content, 30, now=later) is True
+
+
+async def test_concurrent_identical_episodes_yield_exactly_one_writer(tmp_path):
+    """The claim is one atomic statement, so contention cannot split it.
+
+    Sol's review test (`tests/review/test_q_lifecycle_adversarial.py`) runs
+    twelve; this is the same scenario at fifty, on a ledger whose lifecycle
+    tables do not exist yet, so table creation is under contention too.
+    """
+    import asyncio
+
+    store = await _store(tmp_path)
+    results = await asyncio.gather(
+        *(lifecycle.should_write_episode(store, USER, "Student asked: same turn", 30)
+          for _ in range(50))
+    )
+    assert results.count(True) == 1
+    assert results.count(False) == 49
+
+
+async def test_probes_tested_is_an_int_once_the_ledger_carries_the_column(tmp_path):
+    """`propose_evictions` reads `probes_tested` through `a.*`: absent column ->
+    None, present column -> the recorded integer. Migration 0002 is the only
+    thing between the two (`.sol/requests/q2-lifecycle-store-methods.md`)."""
+    import sqlite3
+
+    store = await _store(tmp_path)
+    await _seen(store, "mem_fact", "fact")
+    await _ablated(store, "mem_fact", "evict")
+    (before,) = await lifecycle.propose_evictions(
+        USER, min_age_days=1, min_monthly_cost_usd=0.0, store=store, now=LATER
+    )
+    assert before.probes_tested is None
+    assert "unrecorded probe count" in before.reason
+
+    conn = sqlite3.connect(store.path)
+    conn.execute("ALTER TABLE ablation_results ADD COLUMN probes_tested INTEGER")
+    conn.execute("UPDATE ablation_results SET probes_tested = 25")
+    conn.commit()
+    conn.close()
+    (after,) = await lifecycle.propose_evictions(
+        USER, min_age_days=1, min_monthly_cost_usd=0.0, store=store, now=LATER
+    )
+    assert after.probes_tested == 25 and isinstance(after.probes_tested, int)
+    assert "25 probes" in after.reason
+
+
+async def test_the_backend_is_chosen_by_what_the_store_exposes(tmp_path):
+    """A store that carries the contract itself is used as-is; the SQLite
+    store is adapted from its path; the Snowflake store from its session."""
+    from contextlib import contextmanager
+
+    class Carries:
+        dialect = "sqlite"
+
+        async def execute(self, sql, params=()):
+            return [], 0
+
+    class SessionOnly:
+        @contextmanager
+        def _session(self):
+            yield None
+
+    carries = Carries()
+    assert lifecycle._backend(carries) is carries
+    assert lifecycle._backend(await _store(tmp_path)).dialect == "sqlite"
+    assert lifecycle._backend(SessionOnly()).dialect == "snowflake"

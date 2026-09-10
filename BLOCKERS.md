@@ -383,3 +383,41 @@ changes nothing" line has an `X` of zero until the ledger has been fed.
 `python -m ablation.run --sample 25`. The cost column then reflects the recorded sweep and the
 eviction total is a real projection. Any run that shows `$0.00` next to `evict` has skipped this
 step.
+
+## 2026-09-10 — The memory lifecycle has never run against Snowflake
+
+**Status:** open; written, driven against a fake, unexercised. `LEDGER_PROVIDER=snowflake` now
+reaches every lifecycle operation (`.review/q/1` F2) instead of raising, and the connector is not
+installed in this venv, so nothing on that path has executed.
+
+`app/telemetry/lifecycle.py :: _Snowflake.execute` carries the `# VERIFY-AT-EVENT:` marker. A
+real run must confirm:
+
+1. `cursor.rowcount` after the `_CLAIM_EPISODE` `MERGE` is 1 for a fresh or expired row and 0
+   for a row inside the window. `should_write_episode` reads `affected > 0` as "this caller
+   writes". If the connector reports `-1`, or only the inserted count, sum the MERGE's result row
+   (*number of rows inserted* + *number of rows updated*) instead.
+2. `TO_TIMESTAMP_NTZ(%s)` binds the ISO-Z strings `_iso` produces, in `WHERE r.first_seen <=`
+   and `WHEN MATCHED AND t.ts <` as it already does in the stores' own inserts.
+3. The two `CREATE TABLE IF NOT EXISTS` renderings of `lifecycle.TABLES` land in
+   `MEMORYLEDGER.LEDGER` and `DESC TABLE` matches `migrate.declared_shape` (else 0002 will refuse
+   them, D38).
+4. Exactly-once under contention across **processes** is Snowflake's table-level DML lock, not
+   this code; within one process the store's shared connection serialises it. Not measured.
+
+*To resolve:* with credentials, `python scripts/lifecycle.py --user stu_maya_chen --propose`,
+then `--confirm`, then two identical chat turns inside a minute and one `EPISODE_WRITES` row.
+Once T3.1 lands `.sol/requests/q2-lifecycle-store-methods.md`, the marker moves to the store.
+
+## 2026-09-10 — `probes_tested` cannot reach the ledger until migration 0002
+
+**Status:** open, by constraint. `EvictionProposal.probes_tested` is `int | None` and is `None`
+on every proposal today (`.review/q/1` F3): the harness now writes the count into the ledger row,
+both stores drop keys their column list lacks, and `ablation_results` gains the column only in
+0002 — `migrations/`, `app/telemetry/migrate.py` and `tests/test_migrations.py` are all outside
+this track. `propose_evictions` reads `a.*`, so no code change is needed when the column lands;
+`tests/test_lifecycle.py::test_probes_tested_is_an_int_once_the_ledger_carries_the_column` shows
+the integer coming back after an `ALTER TABLE`.
+
+*To resolve:* land §2 of `.sol/requests/q2-lifecycle-store-methods.md` (the migration, the
+named-column Snowflake INSERT, the test change). Rows recorded before it stay `None`.

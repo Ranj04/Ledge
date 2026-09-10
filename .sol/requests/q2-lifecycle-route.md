@@ -67,8 +67,9 @@ async def lifecycle_proposals(principal: Principal = Depends(auth.resolve)) -> l
 
 `user_id` comes from the `Principal`, never from the query string. The response is a
 list of `EvictionProposal` as dicts: `memory_id, user_id, memory_type, monthly_cost_usd,
-similarity, probes_tested, reason`. `probes_tested` is `None` today — the harness does
-not persist its probe count (see §4). Listing is not retiring: nothing on this route
+similarity, probes_tested, reason`. `probes_tested` is `int | None`: the harness writes it
+into the ledger row, and it reads back as an integer once migration 0002 adds the column
+(`q2-lifecycle-store-methods.md` §2); rows recorded before that stay `None`. Listing is not retiring: nothing on this route
 writes.
 
 ## 3. Retirement must be applied to retrieval
@@ -140,10 +141,8 @@ need `TABLES` deduplicated by name (last declaration wins) and `_assert_all_as_d
 run against that deduplicated list. Either way `scripts/migrate.py --dialect sqlite
 --dry-run | grep -c retired_at` becomes `>= 1` only once the migration file exists.
 
-Optional, same migration: add `("probes_tested", "int", True, False)` to
-`ablation_results` and have `ablation/harness.py`'s `ledger_row()` write it (I own the
-harness and will do that half once the column can exist), so `EvictionProposal.probes_tested`
-stops being `None`.
+Superseded: the migration, the `probes_tested` column and the store methods the lifecycle
+needs on both providers are specified in `q2-lifecycle-store-methods.md`.
 
 ## 5. A Q1 follow-up in the same file
 
@@ -154,6 +153,8 @@ what the prompt actually carries.
 
 ## Not done here, and why
 
-`lifecycle.py` runs against `SqliteLedgerStore` only. `SnowflakeLedgerStore` has no
-`path`; a Snowflake rendering of the two tables and four queries is marked
-`VERIFY-AT-EVENT` in `_connect` rather than written blind.
+`lifecycle.py` runs against both stores — `SqliteLedgerStore` through its `path`,
+`SnowflakeLedgerStore` through its `_session()` — by way of two adapters that live in
+`lifecycle.py` because the store files are not this track's. The public surface that
+replaces those adapters is `q2-lifecycle-store-methods.md` §1. The Snowflake path has
+never run; its `# VERIFY-AT-EVENT:` items are listed there.

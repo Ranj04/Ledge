@@ -68,6 +68,11 @@ class AblationResult:
             "verdict": self.verdict,
             "tokens_saved": self.tokens,
             "monthly_cost_usd": self.monthly_cost_usd,
+            # Measured evidence behind the verdict. Both stores write the columns
+            # `ablation_results` declares, and until migration 0002 adds this one
+            # (`.sol/requests/q2-lifecycle-store-methods.md`) they leave it on the
+            # floor; `lifecycle.propose_evictions` reads it back the moment it lands.
+            "probes_tested": self.probes_tested,
         }
 
 
