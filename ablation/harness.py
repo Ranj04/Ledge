@@ -11,20 +11,20 @@ from __future__ import annotations
 import json
 import uuid
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
+from ablation.similarity import SimilarityScorer, scorer_from_env
 from app.assembler.assemble import assemble
 from app.assembler.tiering import TierRegistry
 from app.config import make_cortex_client, make_everos_client, make_ledger_store
-from app.memory_types import ALWAYS_INJECTED, tier_for
 from app.contracts import Memory
 from app.cortex.tokens import count_tokens
 from app.everos.mock_client import lexical_score, tokenize
-
-from ablation.similarity import SimilarityScorer, scorer_from_env
+from app.memory_types import tier_for
 
 # Verdict policy lives in one place. Exact simulator matches score 1.0; the
 # planted load-bearing memory produced a materially lower lexical score in its
@@ -58,7 +58,7 @@ class AblationResult:
             "ablation_id": f"abl_{uuid.uuid4().hex[:12]}",
             "memory_id": self.memory_id,
             "user_id": self.user_id,
-            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "prompt": self.prompt,
             "baseline_answer": self.baseline_answer,
             "ablated_answer": self.ablated_answer,

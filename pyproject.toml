@@ -17,3 +17,27 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+  # ablation/harness.py:99 and :139 use bare asserts as the leave-one-out
+  # GUARANTEE, not as debug scaffolding. No assert-rewriting rule may touch them.
+  "B011",
+  # The prose in this repo uses em dashes and typographic quotes deliberately.
+  "RUF001", "RUF002",
+  # zip(strict=) at the eight call sites: strict=False is a no-op, strict=True is
+  # a behaviour change with no test coverage. Neither belongs in a lint pass that
+  # must end green without changing semantics.
+  "B905",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 459 of the repo's 464 over-length lines are seeded prose and data literals in
+# the student generator; wrapping them would rewrite the seed corpus.
+"seed/generate.py" = ["E501"]
+# Every over-length line here is a `# VERIFY-AT-EVENT:` marker, which Appendix A
+# of MemoryLedger-EXECUTE.md says not to reflow.
+"ablation/similarity.py" = ["E501"]
+# One diagnostic f-string.
+"seed/verify.py" = ["E501"]

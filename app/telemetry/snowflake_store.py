@@ -20,9 +20,10 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections.abc import Sequence
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 from app.config import get_settings
 from app.contracts import CallRecord, InjectionRecord
@@ -198,7 +199,7 @@ class SnowflakeLedgerStore:
     async def upsert_memories(self, rows: Sequence[dict[str, Any]]) -> None:
         if not rows:
             return
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         params = [
             (r["memory_id"], r["content_hash"], r["tier"], r["stable_calls"],
              r["tokens"], now,

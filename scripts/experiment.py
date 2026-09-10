@@ -38,10 +38,10 @@ import argparse
 import asyncio
 import json
 import statistics
-import uuid
 import sys
+import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -327,7 +327,7 @@ async def main() -> int:
     }
 
     payload = {
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "providers": {
             "cortex": settings.cortex_provider,
             "everos": settings.everos_provider,

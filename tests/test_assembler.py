@@ -11,7 +11,7 @@ Two things are being pinned down here:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -19,7 +19,7 @@ from app.assembler.assemble import assemble
 from app.assembler.tiering import HOLDING_TIER, NATURAL_TIER, TierRegistry
 from app.contracts import Memory
 
-NOW = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
 OLD = (NOW - timedelta(days=10)).isoformat().replace("+00:00", "Z")
 FRESH = (NOW - timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
 

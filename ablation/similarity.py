@@ -12,8 +12,8 @@ import math
 import os
 import re
 from collections import Counter
+from collections.abc import Callable
 from difflib import SequenceMatcher
-from typing import Callable
 
 from app.config import get_settings
 

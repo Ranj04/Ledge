@@ -13,9 +13,10 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from app.contracts import CallRecord, InjectionRecord
 
@@ -146,7 +147,7 @@ class SqliteLedgerStore:
     async def upsert_memories(self, rows: Sequence[dict[str, Any]]) -> None:
         if not rows:
             return
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         values = [
             (r["memory_id"], r["user_id"], r["memory_type"], r["content_hash"],
              r["tier"], r["stable_calls"], r["tokens"], now, now)
@@ -175,7 +176,7 @@ class SqliteLedgerStore:
     async def memory_costs(
         self, *, user_id: str | None = None, days: int = 30
     ) -> list[dict[str, Any]]:
-        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace(
+        since = (datetime.now(UTC) - timedelta(days=days)).isoformat().replace(
             "+00:00", "Z"
         )
 
@@ -243,7 +244,7 @@ class SqliteLedgerStore:
 
         by_mode = {r["mode"]: r for r in await self._run(go)}
         out: dict[str, Any] = {"by_mode": by_mode}
-        for mode, row in by_mode.items():
+        for row in by_mode.values():
             total_in = row["input_tokens"] or 0
             row["cache_hit_rate"] = (row["cached_tokens"] or 0) / total_in if total_in else 0.0
             row["saved_usd"] = (row["baseline_cost_usd"] or 0) - (row["cost_usd"] or 0)

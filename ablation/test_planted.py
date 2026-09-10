@@ -5,10 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from ablation.harness import build_probes, evaluate_memory, neighbour_probes
 from app.config import make_cortex_client, make_everos_client
 from app.contracts import Memory
-
-from ablation.harness import build_probes, evaluate_memory, neighbour_probes
 
 
 @pytest.mark.asyncio

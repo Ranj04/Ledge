@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.config import Pricing, get_settings
 from app.contracts import AssembledPrompt, CallRecord, InjectionRecord, Usage
@@ -87,7 +87,7 @@ def build_records(
     p = pricing or get_settings().pricing
     cost = call_cost(usage, p)
     call_id = call_id or f"call_{uuid.uuid4().hex[:12]}"
-    ts = ts or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    ts = ts or datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     call = CallRecord(
         call_id=call_id,

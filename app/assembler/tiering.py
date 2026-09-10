@@ -15,16 +15,16 @@ invalidate anything.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.contracts import Memory
 from app.memory_types import (  # noqa: F401  (re-exported for callers)
     NATURAL_TIER,
-    tier_for,
     TIER_NAMES,
     TIER_SOURCE,
     MemoryType,
     Tier,
+    tier_for,
 )
 
 # Where an untrusted memory waits.  Tier 3 is never cached, so a memory parked
@@ -64,7 +64,7 @@ def _parse_ts(value: str | None) -> datetime | None:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 class TierRegistry:
@@ -127,9 +127,9 @@ class TierRegistry:
         state = self._states.get(memory.memory_id)
 
         if state is None:
-            now = now or datetime.now(timezone.utc)
+            now = now or datetime.now(UTC)
             if now.tzinfo is None:
-                now = now.replace(tzinfo=timezone.utc)
+                now = now.replace(tzinfo=UTC)
             updated = _parse_ts(memory.updated_at or memory.created_at)
             already_stable = updated is not None and (now - updated) >= PRIOR_STABILITY_WINDOW
             state = MemoryState(

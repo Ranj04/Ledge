@@ -7,10 +7,9 @@ import asyncio
 import json
 from pathlib import Path
 
-from app.config import make_cortex_client, make_everos_client, make_ledger_store
-
-from app.memory_types import ALWAYS_INJECTED
 from ablation.harness import AblationResult, evaluate_memory
+from app.config import make_cortex_client, make_everos_client, make_ledger_store
+from app.memory_types import ALWAYS_INJECTED
 
 PLANTED_PATH = Path("data/seed/planted.json")
 

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
+from app.contracts import AssembledPrompt, ContentBlock
 from app.cortex.cache_sim import PromptCacheSimulator, SimBlock, flatten_prompt
 from app.cortex.tokens import count_tokens
-from app.contracts import AssembledPrompt, ContentBlock
 
 WORDS = (
     "balancing redox half reactions in acidic solution requires adding water "
