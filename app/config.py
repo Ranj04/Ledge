@@ -150,6 +150,19 @@ class Settings:
     port: int = field(default_factory=lambda: _env_int("PORT", 8000))
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", "INFO"))
 
+    # Lifecycle (Track Q, app/telemetry/lifecycle.py). Thresholds for
+    # `scripts/lifecycle.py --propose`, and the dedup window the chat route's
+    # episode write is guarded by.
+    lifecycle_min_age_days: int = field(
+        default_factory=lambda: _env_int("LIFECYCLE_MIN_AGE_DAYS", 1)
+    )
+    lifecycle_min_monthly_cost_usd: float = field(
+        default_factory=lambda: float(_env("LIFECYCLE_MIN_MONTHLY_COST_USD") or 0.01)
+    )
+    episode_dedup_window_minutes: int = field(
+        default_factory=lambda: _env_int("EPISODE_DEDUP_WINDOW_MINUTES", 30)
+    )
+
     @property
     def active_model(self) -> str:
         """The model actually serving inference, whichever provider is selected."""
