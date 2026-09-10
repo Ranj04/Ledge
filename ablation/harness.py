@@ -168,7 +168,7 @@ def verdict_for(
     if similarity is None:
         return "inconclusive"
     if similarity >= EVICT_MIN_SIMILARITY:
-        if normalise(memory_type, strict=False) == "skill":
+        if memory_type is not None and normalise(memory_type, strict=False) == "skill":
             return "policy"
         if probes_tested is not None and probes_tested < MIN_PROBES_FOR_EVICTION:
             return "untested"

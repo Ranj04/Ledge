@@ -27,3 +27,20 @@ async def test_a_small_limit_never_drops_an_always_injected_memory() -> None:
         memory.memory_id for memory in result if memory.memory_type in ALWAYS_INJECTED
     }
     assert actual == expected
+
+
+@pytest.mark.asyncio
+async def test_a_small_limit_preserves_episode_history() -> None:
+    client = MockEverOSClient()
+
+    result = await client.retrieve(user_id="stu_maya_chen", query="moles", limit=5)
+
+    assert any(memory.memory_type == "episode" for memory in result)
+
+
+@pytest.mark.asyncio
+async def test_a_negative_limit_is_rejected() -> None:
+    client = MockEverOSClient()
+
+    with pytest.raises(ValueError, match="limit must be >= 0"):
+        await client.retrieve(user_id="stu_maya_chen", query="moles", limit=-1)

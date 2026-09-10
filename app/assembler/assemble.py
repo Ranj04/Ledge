@@ -91,7 +91,6 @@ TIER_HEADERS = {
 NAIVE_HEADER = "## What I remember about this student"
 
 _WS = re.compile(r"\s+")
-_LEADING_MARKUP = re.compile(r"^[#\-*\s]+")
 
 
 def _render(memory: Memory) -> str:
@@ -101,11 +100,13 @@ def _render(memory: Memory) -> str:
     raw, a stored turn containing newlines writes additional lines into the
     prompt -- verified: one hostile episode produced three lines, one of them a
     forged '## How to tutor this student' header, and mock_client._memory_lines
-    re-parsed the block as three memories. Collapsing whitespace and stripping
-    leading markup makes that structurally impossible rather than unlikely.
+    re-parsed the block as three memories. Collapsing whitespace makes that
+    structurally impossible: the ``- `` prefix means any hostile markup stays
+    mid-line. We deliberately do not strip markup because doing so corrupts
+    legitimate content such as ``-40 C``.
     """
     flat = _WS.sub(" ", memory.content.replace("\u2028", " ").replace("\u2029", " "))
-    flat = _LEADING_MARKUP.sub("", flat).strip()
+    flat = flat.strip()
     return f"- {flat}\n"
 
 
