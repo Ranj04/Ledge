@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from app.config import get_settings
 from app.contracts import AssembledPrompt, InferenceResult, StreamEvent, Usage

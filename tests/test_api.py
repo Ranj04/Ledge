@@ -304,10 +304,10 @@ def test_the_inspectors_token_total_matches_what_the_simulator_bills(client):
     counts, so it under-reported by ~7 tokens per prompt."""
     import asyncio
 
+    from app.api.routes import _describe
     from app.api.service import get_service
     from app.assembler.assemble import assemble
     from app.assembler.tiering import TierRegistry
-    from app.api.routes import _describe
     from app.cortex.cache_sim import flatten_prompt
     from app.cortex.tokens import count_tokens
 

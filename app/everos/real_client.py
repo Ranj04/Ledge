@@ -28,9 +28,9 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
-from urllib.parse import urlparse
 
 from app.config import get_settings
 from app.contracts import Memory, MemoryType

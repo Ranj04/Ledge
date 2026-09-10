@@ -11,15 +11,16 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app import memory_types
 from app.api.schemas import ChatRequest, InspectRequest
 from app.api.service import Service, get_service
 from app.assembler.assemble import assemble
-from app import memory_types
 from app.assembler.tiering import TIER_NAMES, TIER_SOURCE, TierRegistry
 from app.contracts import AssembledPrompt, Usage
 from app.cortex.tokens import count_tokens

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import tiktoken
@@ -12,11 +12,10 @@ import tiktoken
 from app.contracts import Memory
 from app.memory_types import normalise, tier_for
 
-
 ROOT = Path(__file__).resolve().parents[1]
 STABLE_TYPES = {"skill", "profile", "fact"}
 EXPECTED_TYPES = {"skill", "profile", "fact", "episode", "foresight", "case"}
-STABLE_CUTOFF = datetime(2026, 8, 4, tzinfo=timezone.utc)
+STABLE_CUTOFF = datetime(2026, 8, 4, tzinfo=UTC)
 EXPECTED_PLANTED = {"junk": ["mem_ef6be89e"], "critical": ["mem_89dad914"]}
 
 

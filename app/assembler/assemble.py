@@ -29,11 +29,11 @@ pertinent recent material sits closest to the question.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Literal, Sequence
+from typing import Literal
 
 from app.assembler.tiering import TIER_NAMES, TIER_SOURCE, TierRegistry
-from app.memory_types import tier_for
 from app.contracts import (
     AssembledPrompt,
     ContentBlock,
@@ -42,6 +42,7 @@ from app.contracts import (
     Tier,
 )
 from app.cortex.tokens import count_tokens
+from app.memory_types import tier_for
 
 EPHEMERAL = {"type": "ephemeral"}
 

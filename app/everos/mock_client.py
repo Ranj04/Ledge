@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -140,7 +140,7 @@ class MockEverOSClient:
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Memory:
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         # Normalise on the way in. A caller passing "episodic" would otherwise
         # store a non-canonical string that no type-keyed lookup matches, and
         # the memory would be silently unretrievable.
@@ -183,7 +183,7 @@ class MockEverOSClient:
         if memory is None:
             return None
         memory.content = content
-        memory.updated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        memory.updated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return memory
 
 

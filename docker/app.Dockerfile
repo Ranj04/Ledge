@@ -18,6 +18,10 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-warm the BPE table at build time. Without this the first request in a
+# network-restricted container 500s inside tiktoken, not inside our code.
+RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+
 COPY app/ ./app/
 COPY ablation/ ./ablation/
 COPY seed/ ./seed/

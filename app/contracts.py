@@ -10,13 +10,13 @@ change is needed, write it to HANDOFF.md rather than editing silently.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Literal, Protocol, Sequence
+from typing import Any, Literal, Protocol
 
 # ---------------------------------------------------------------------------
 # Memory
 # ---------------------------------------------------------------------------
-
 # Memory types and their volatility tiers live in exactly one module.  We do not
 # invent a classifier; EverOS's own types map onto volatility directly.
 # Re-exported here so existing imports keep working.

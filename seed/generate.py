@@ -6,14 +6,13 @@ import hashlib
 import json
 import random
 from collections import defaultdict
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
 import tiktoken
 
 from app.memory_types import tier_for
-
 
 RNG_SEED = 20260806
 GENERATED_AT = "2026-08-06T00:00:00Z"
@@ -34,7 +33,7 @@ def _session_times(offset_minutes: int = 0) -> list[datetime]:
             if day > date(2026, 8, 5):
                 continue
             result.append(
-                datetime.combine(day, time(hour, 10), tzinfo=timezone.utc)
+                datetime.combine(day, time(hour, 10), tzinfo=UTC)
                 + timedelta(minutes=offset_minutes)
             )
     return result
@@ -670,7 +669,7 @@ def _student(
 ) -> dict[str, Any]:
     sessions = _session_times(offset_minutes)
     # Stable memories must be old enough to remain in their natural cache tier.
-    stable_cutoff = datetime(2026, 8, 4, tzinfo=timezone.utc)
+    stable_cutoff = datetime(2026, 8, 4, tzinfo=UTC)
     stable_sessions = [session for session in sessions if session <= stable_cutoff]
     memories: list[dict[str, Any]] = []
     for memory_type, contents in (
@@ -746,8 +745,8 @@ def _add_planted_memories(rng: random.Random, maya: dict[str, Any]) -> dict[str,
     )
     planted: dict[str, list[str]] = {"junk": [], "critical": []}
     for label, content, timestamp in (
-        ("junk", junk_content, datetime(2026, 7, 20, 18, 42, tzinfo=timezone.utc)),
-        ("critical", critical_content, datetime(2026, 7, 27, 18, 34, tzinfo=timezone.utc)),
+        ("junk", junk_content, datetime(2026, 7, 20, 18, 42, tzinfo=UTC)),
+        ("critical", critical_content, datetime(2026, 7, 27, 18, 34, tzinfo=UTC)),
     ):
         item = _memory(
             rng=rng,
