@@ -9,10 +9,10 @@ The connector is synchronous, so every call runs in a thread. That is fine
 because telemetry is already off the request path — `record_call` is invoked
 from a FastAPI background task, never inline.
 
-Run `sql/01_ddl.sql` before starting the service with LEDGER_PROVIDER=snowflake.
-`init_schema` here executes the same DDL so the service is self-sufficient, but
-running the file first makes failures visible in Snowsight rather than in a log
-line.
+`init_schema` applies `migrations/` through `app/telemetry/migrate.py` — the same
+declaration `SqliteLedgerStore` uses — so the service is self-sufficient.
+`sql/01_ddl.sql` is that DDL rendered to a file; running it first in Snowsight
+makes failures visible there rather than in a log line.
 """
 
 from __future__ import annotations
@@ -27,30 +27,7 @@ from typing import Any
 
 from app.config import get_settings
 from app.contracts import CallRecord, InjectionRecord
-
-DDL = [
-    """CREATE TABLE IF NOT EXISTS CALL_LOG (
-        CALL_ID STRING PRIMARY KEY, SESSION_ID STRING, USER_ID STRING,
-        TS TIMESTAMP_NTZ, MODE STRING, MODEL STRING,
-        INPUT_TOKENS NUMBER, OUTPUT_TOKENS NUMBER, CACHED_TOKENS NUMBER,
-        CACHE_WRITE_TOKENS NUMBER, COST_USD FLOAT, COST_UNCACHED_USD FLOAT,
-        COST_CACHED_USD FLOAT, COST_WRITE_USD FLOAT, COST_OUTPUT_USD FLOAT,
-        LATENCY_MS FLOAT, BREAKPOINT_COUNT NUMBER, TIER_TOKENS VARIANT,
-        BASELINE_COST_USD FLOAT)""",
-    """CREATE TABLE IF NOT EXISTS MEMORY_INJECTIONS (
-        CALL_ID STRING, MEMORY_ID STRING, USER_ID STRING, TS TIMESTAMP_NTZ,
-        TIER NUMBER, MEMORY_TYPE STRING, TOKENS NUMBER, WAS_CACHED BOOLEAN,
-        ATTRIBUTED_COST_USD FLOAT)""",
-    """CREATE TABLE IF NOT EXISTS MEMORY_REGISTRY (
-        MEMORY_ID STRING PRIMARY KEY, USER_ID STRING, MEMORY_TYPE STRING,
-        CONTENT_HASH STRING, TIER NUMBER, STABLE_CALLS NUMBER, TOKENS NUMBER,
-        FIRST_SEEN TIMESTAMP_NTZ, LAST_SEEN TIMESTAMP_NTZ)""",
-    """CREATE TABLE IF NOT EXISTS ABLATION_RESULTS (
-        ABLATION_ID STRING PRIMARY KEY, MEMORY_ID STRING, USER_ID STRING,
-        TS TIMESTAMP_NTZ, PROMPT STRING, BASELINE_ANSWER STRING,
-        ABLATED_ANSWER STRING, SIMILARITY FLOAT, VERDICT STRING,
-        TOKENS_SAVED NUMBER, MONTHLY_COST_USD FLOAT)""",
-]
+from app.telemetry import migrate
 
 
 class SnowflakeLedgerStore:
@@ -155,8 +132,13 @@ class SnowflakeLedgerStore:
                     cur.execute(f"CREATE DATABASE IF NOT EXISTS {db}")
                     cur.execute(f"CREATE SCHEMA IF NOT EXISTS {db}.{schema}")
                     cur.execute(f"USE SCHEMA {db}.{schema}")
-                    for statement in DDL:
-                        cur.execute(statement)
+                # VERIFY-AT-EVENT: `migrate.apply` has only ever run against SQLite.
+                # A real run must confirm (1) SCHEMA_MIGRATIONS gains one row for
+                # 0001_initial and a restart adds none, and (2) DESC TABLE CALL_LOG
+                # shows TIER_TOKENS as VARCHAR. The 2026-08-07 tables were created
+                # with it VARIANT and IF NOT EXISTS will not change them; if so,
+                # drop the four tables and restart (D37).
+                migrate.apply(conn, "snowflake")
 
         await self._run(go)
 
@@ -166,12 +148,12 @@ class SnowflakeLedgerStore:
         def go():
             with self._session() as conn:
                 with conn.cursor() as cur:
-                    # TIER_TOKENS is VARIANT, so the JSON goes in as a string
-                    # and PARSE_JSON does the conversion server-side.
+                    # TIER_TOKENS is JSON text on both backends (D37), so the
+                    # string goes in as-is and reads back as a string either way.
                     cur.execute(
                         """INSERT INTO CALL_LOG SELECT
                            %s,%s,%s,TO_TIMESTAMP_NTZ(%s),%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                           PARSE_JSON(%s),%s""",
+                           %s,%s""",
                         (
                             call.call_id, call.session_id, call.user_id, call.ts,
                             call.mode, call.model, call.input_tokens, call.output_tokens,
