@@ -10,7 +10,7 @@ Current state, verified this afternoon:
 | EverOS | ✅ live path verified — probe passes 11/11. Demo runs on seeded memory on purpose (D19). |
 | Snowflake ledger | ⚠️ **works, but not on the demo path** — DDL applied and a full sweep recorded (382 calls, 39,728 injections), rollups correct in Snowsight. The session-summary endpoint wedges against it, so **the demo runs on sqlite**. See BLOCKERS. |
 | Snowflake Cortex | ⛔ **not available** — the trial account has no Cortex entitlement on any surface. Not fixable today. |
-| Simulators | ✅ 118 tests + 5 ablation green. The offline fallback, still works. |
+| Simulators | ✅ 151 tests green, 6 of them the ablation control (measured 2026-09-10; the ablation tests are collected by the same run). The offline fallback, still works. |
 
 **Both mandatory sponsors are live on the demo path:** EverOS remembers, Snowflake holds the ledger
 and the economics rollups. Snowflake is the economics layer rather than a model vendor — for an
@@ -59,8 +59,8 @@ token name — `cacheguard` already exists and the statement fails on a duplicat
 
 ```bash
 cd <repository-root>
-.venv/bin/python -m pytest -q          # expect 118 passed
-.venv/bin/pytest ablation/ -q          # expect 5 passed
+.venv/bin/python -m pytest -q          # expect 151 passed (2026-09-10)
+.venv/bin/pytest ablation/ -q          # expect 6 passed (2026-09-10)
 cd web && npm run build && cd ..
 ```
 
@@ -194,7 +194,7 @@ Regenerate: `grep -rn "VERIFY-AT-EVENT" app/ scripts/ sql/ ablation/ docker/`
 | `app/everos/real_client.py` | ~~response shape~~, ~~owner ids~~, ~~timestamps~~ — **confirmed live**. Remaining: the `hybrid` search method choice, and whether `add` accepts a type hint |
 | `app/memory_types.py` | `ALIASES` is where to add any EverOS type name we do not recognise. Watch `/api/status → unknown_types_seen` |
 | `app/telemetry/snowflake_store.py` | ~~whether a PAT authenticates as a password~~ — **confirmed, it does** |
-| `app/telemetry/reconcile.py`, `sql/03_reconcile.sql` | **withdrawn** — it reconciled against `CORTEX_REST_API_USAGE_HISTORY`, which will be empty forever now (D33) |
+| `app/telemetry/reconcile.py`, `sql/03_reconcile.sql` | **deleted** — it reconciled against `CORTEX_REST_API_USAGE_HISTORY`, which will be empty forever now (D33, amended 2026-09-10) |
 | `ablation/similarity.py` | the Cortex-embedding scorer. Only used with `ABLATION_SCORER=embedding`; default `lexical` needs none of it |
 | `docker/everos.Dockerfile` | self-hosted only — not on today's path |
 

@@ -10,7 +10,7 @@ every number in MemoryLedger works against real Cortex.
 What to look for, in order:
 
 1. Both calls return 200. If not, the failure is auth or the base URL — check
-   SNOWFLAKE_ACCOUNT and SNOWFLAKE_PAT, and see EVENT_DAY.md step 2.
+   SNOWFLAKE_ACCOUNT and SNOWFLAKE_PAT, and see docs/history/EVENT_DAY.md step 2.
 2. Call 1 shows a non-zero `cache_creation_input_tokens` (or similar).
 3. Call 2 shows a non-zero `cache_read_input_tokens` (or similar) roughly equal
    to call 1's creation count.
@@ -88,7 +88,7 @@ async def main() -> int:
     print("=" * 60)
     if second.cached_tokens > 0:
         print(f"CACHING CONFIRMED — call 2 read {second.cached_tokens} tokens from cache.")
-        print("Everything downstream works. Proceed to EVENT_DAY.md step 4.")
+        print("Everything downstream works. Proceed to docs/history/EVENT_DAY.md step 4.")
         return 0
 
     print("NO CACHE READ REPORTED on call 2.")

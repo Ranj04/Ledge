@@ -15,7 +15,7 @@ them at conftest import time is enough — no monkeypatching, no import-order
 trickery.
 
 This is the *test* configuration. It says nothing about how the app runs; the
-event flips the real switches in `.env` exactly as `EVENT_DAY.md` describes.
+event flips the real switches in `.env` exactly as `docs/history/EVENT_DAY.md` describes.
 """
 
 from __future__ import annotations

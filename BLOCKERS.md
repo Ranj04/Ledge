@@ -99,16 +99,26 @@ directions — but a lexical composer and Claude do not agree on what is relevan
 *To resolve:* `CORTEX_PROVIDER=real .venv/bin/python -m ablation.run --sample 25`. Whatever rate
 that produces is the number to quote.
 
-## B4 — `CORTEX_REST_API_USAGE_HISTORY` view name and columns unverified
+## B4 — Vendor-billing reconciliation is open, and manual
 
-**Status:** open, resolves at the event.
+**Status:** open. No code does it. Rewritten 2026-09-10; the original B4 described
+`sql/03_reconcile.sql`, which Track B deleted (DECISIONS.md D33, amended).
 
-`sql/03_reconcile.sql` compares our `CALL_LOG` against Snowflake's account-usage view for Cortex
-REST calls. Neither the exact view name nor its column set could be checked without an account.
-Every uncertain line is marked `-- VERIFY-AT-EVENT:`.
+The question this item answers is "how do you know your ledger agrees with what the vendor
+billed?" — and today the honest answer is: **by hand.** Compare `CALL_LOG` for a sweep window
+against the provider's billing dashboard (OpenAI's usage page for `CORTEX_PROVIDER=openai`) and
+see whether the token totals agree. Nothing in `app/` or `sql/` automates that, and nothing should
+until there is a vendor record to reconcile against that does not lag 45 minutes.
 
-Note this view lags **up to 45 minutes**. It is a post-hoc credibility check — "our ledger agrees
-with Snowflake's own billing record" — and must never be wired to the live meter.
+What was deleted, and why it does not count: the old module compared the ledger against
+`SNOWFLAKE.ACCOUNT_USAGE.CORTEX_REST_API_USAGE_HISTORY`, a view that records Cortex REST calls
+(which we make none of) and lags up to 45 minutes. Its own docstring conceded it did not reconcile
+against a vendor billing record. Unreferenced code that *looks* like a billing reconciliation, in a
+repo whose thesis is trustworthy cost numbers, was worse than no code.
+
+*What would resolve it:* one manual comparison for a recorded sweep, written down with the two
+numbers side by side. The cache-write blind spot below (writes are not observable on the OpenAI
+path) means the ledger will read **low**, and by how much is exactly what the comparison would show.
 
 ## 2026-08-07 — EverOS live path unverified from this session
 
@@ -307,3 +317,69 @@ Not attempted before the event: the demo path is secured on sqlite, and this is 
 storage backend rather than anything the audience sees. Snowflake still holds a full recorded sweep
 (382 calls, 39,728 injections) and the rollup views read it correctly from Snowsight — that is what
 to show if anyone asks to see the tables.
+
+## 2026-09-10 — No live `results/*.json` artifact exists
+
+**Status:** open. Needs an `OPENAI_API_KEY` and about ten minutes.
+
+The **42.9%** input-side reduction in `README.md` came from a live run on 2026-08-07 whose JSON
+output was not retained. Track C (C2) went to commit the artifact behind the headline and found
+there was none to commit; no `OPENAI_API_KEY` is configured on this machine, so it could capture
+only the simulator's — `results/2026-09-10-simulator.json`, self-labelled `measurement=simulated`,
+`cortex=sim`. The claim is labelled, not deleted, and `results/README.md` says all of this.
+
+*To resolve:* with the key in `.env`,
+`CORTEX_PROVIDER=openai python scripts/experiment.py --runs 4 --json > results/<date>-openai.json`
+and commit the file. Expect a number near 42.9%, not exactly it — D30 explains why output tokens
+wobble and why the reduction is reported input-side. Session ids carry a per-invocation nonce
+(D32), so a re-run does not read the previous run's cache.
+
+## 2026-09-10 — The Docker tokenizer pre-warm layer has never been built
+
+**Status:** open. Written to spec, unverified.
+
+`docker/app.Dockerfile` pre-warms the `tiktoken` encoding at image build so the first request does
+not pay a network fetch. Docker CLI 29.4.3 is installed on this machine but the Desktop daemon was
+not running when T0 wrote the layer, and the builder correctly declined to start it. Nobody has run
+`docker build` against it since. It may work first time; it may not; **nothing here says which.**
+
+*To resolve:* start the daemon and `docker build -f docker/app.Dockerfile .`, then run the image
+and hit `/api/status`. If the tokenizer fetch is still on the first request, the layer is wrong.
+
+## 2026-09-10 — The CI workflow has never run
+
+**Status:** open. A workflow that has never run is a claim.
+
+`.github/workflows/ci.yml` was written from scratch at T0 — the `~/mem` lineage it was meant to be
+ported from does not exist on this machine — and nothing has been pushed since, so GitHub has never
+executed it. It is not known whether the install step resolves on the runner's Python, whether the
+pre-warm step has network there, or whether `npm run build` finds `node_modules` (it is not in the
+repo and the workflow has to install it).
+
+*To resolve:* push, watch the first run, fix what breaks. Budget for two or three iterations; that
+is what first CI runs cost.
+
+## 2026-09-10 — The eviction dashboard reports `$0.00/month` even with an `evict` verdict
+
+**Status:** open. **Do not let this be discovered live.** The verdict machinery works; the dollar
+figure behind it is unpopulated, and a reviewer who sees `evict` next to `$0.00` will conclude the
+harness is decorative.
+
+Measured 2026-09-10, `python -m ablation.run --sample 25` on a fresh sqlite ledger: the verdicts
+come out as recorded in DECISIONS.md D35 (the planted junk memory `evict` at 1.0000, the planted
+critical one `keep` at 0.7088), and every row's projected monthly cost is **`$0.00`** — including
+the summary line, *"Eviction candidates in tested set: $0.00/month projected."* The dashboard's
+eviction panel (`/api/ledger/ablation`, summed in `web/src/App.tsx`) shows the same zero.
+
+*Why:* `ablation/run.py:91` reads each memory's cost from `store.memory_costs(user_id)`, which
+aggregates `INJECTIONS` rows in the ledger. The seeded corpus is memories, not calls; on a ledger
+that has never recorded a conversation there are no injection rows, so every per-memory cost is
+`0.0` and `harness.py` carries it through faithfully. This is the honesty rule working as intended
+— the harness will not invent a dollar figure — but it means the demo's "this memory costs $X and
+changes nothing" line has an `X` of zero until the ledger has been fed.
+
+*To resolve before the demo:* populate the ledger first, then run the ablation against it:
+`python scripts/experiment.py --runs 4 --record` (writes every call to the ledger) followed by
+`python -m ablation.run --sample 25`. The cost column then reflects the recorded sweep and the
+eviction total is a real projection. Any run that shows `$0.00` next to `evict` has skipped this
+step.

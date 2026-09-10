@@ -5,7 +5,8 @@ pure shape.  Real clients and simulators both satisfy the same Protocols, which
 is what lets us build the whole system tonight without sponsor credentials.
 
 Stability note: changing a field here breaks the other agent's code.  If a
-change is needed, write it to HANDOFF.md rather than editing silently.
+change is needed, write it to `.sol/requests/` rather than editing silently
+(earlier ones are in docs/history/HANDOFF.md).
 """
 
 from __future__ import annotations

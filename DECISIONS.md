@@ -795,3 +795,131 @@ agreeing with a billing view.
 The module is left intact and clearly marked, because it is correct for the Cortex path and that
 path is one environment variable away. **A reconciliation step that cannot run must not sit in the
 runbook looking like it can** — `EVENT_DAY.md` now lists it as withdrawn.
+
+#### D33 — amended 2026-09-10 — the module is deleted, not left intact
+
+Track B (Stage 1, commit `c4c5d09`) deleted the module this entry chose to keep. The ruling above
+stands on its reasoning — withdrawn, not repointed — but "left intact and clearly marked" is no
+longer true, and this entry must not be read as though it were. Track B's paragraph, verbatim:
+
+> `app/telemetry/reconcile.py` and `sql/03_reconcile.sql` were deleted rather than
+> wired. They query a Snowflake `ACCOUNT_USAGE` view that `sql/README.md:9` documents
+> as lagging up to 45 minutes, which makes it unfit for the live meter it appeared to
+> serve, and the module's own docstring already concedes that it does not reconcile
+> against a vendor billing record. The honest reconciliation is a manual comparison
+> against the provider's billing dashboard, and that belongs in `BLOCKERS.md` as open,
+> not in `app/` as code.
+
+Two footnotes so the pointers stay true. The `sql/README.md:9` citation was correct when written;
+the commit that lands this amendment drops the three lines above it, so the sentence now sits at
+`sql/README.md:6`. And the deletion took one `# VERIFY-AT-EVENT:` marker with it
+(`reconcile.py:37`, the view name and columns), so the marker count moves **18 → 17** — a marker
+that pointed at deleted code, not a marker that was reflowed. `AblationRequest` in
+`app/api/schemas.py` went in the same commit for the same reason: its only reference was its own
+definition. `BLOCKERS.md` B4 is rewritten as the open, manual item the paragraph names.
+
+---
+
+## Stage 1 integration — 2026-09-10
+
+Three parallel tracks (A: assembler and ablation, B: API truth, C: front door) landed on `main`
+in one afternoon. These are the calls they made that a reader of the numbers needs to know about.
+
+### D34 — 2026-09-10 — `limit` bounds conditional retrieval only, and the default is `None` because the corpus returns 26
+
+`MockEverOSClient.retrieve` declared `limit: int = 20` and never read it, while
+`app/everos/real_client.py` sends `"top_k": limit`. The simulator and the real client answered the
+same call differently on the one axis that decides how many memories reach the prompt — in a
+project that exists to measure what memories cost.
+
+**The semantics now.** An explicitly supplied `limit` ceilings the *conditional* memories (facts,
+episodes, foresights, cases) after the per-type `TOP_K` budgets are applied. Always-injected
+memories (profiles, skills) are policy, not retrieval (D12), so they sit outside the ceiling: a
+small `limit` cannot silently drop the agent's own instructions, which is precisely the failure the
+simulator exists to make visible. The ceiling selects **round-robin across types** in `TOP_K` order,
+because sorting the whole pool by score and slicing returned five facts and zero episodes — the
+"lost session history" failure `TOP_K`'s own comment exists to prevent (Track A round 2, F4). A
+negative `limit` raises `ValueError` rather than letting Python slice semantics quietly return 25
+of 26 (F2).
+
+**The measurement that sized the change.** For `stu_maya_chen`, query `moles first`, the default
+call returns **26 conditional memories** and 78 always-injected. The declared default of 20 would
+have capped 26 → 20 and moved every number already published against this corpus — the 43.8%
+simulator figure (D17), the committed `results/2026-09-10-simulator.json`, and the ablation
+distribution — without anyone having decided to. So the default is **`None`**: uncapped, matching
+the behaviour every published number was measured under, with the ceiling applied only when a
+caller passes one. Checked: `limit=5` → 5 conditional / 78 always-injected.
+
+**What that leaves unequal, stated plainly.** The real client's default is still `limit: int = 20`
+and it sends that as `top_k`. No caller in `app/api`, `ablation/` or `scripts/experiment.py` passes
+a limit, so against live EverOS the prompt is built from whatever `top_k: 20` returns, and against
+the simulator from everything the per-type budgets admit. That gap existed before Track A; Track A
+made it *visible* rather than closing it, because closing it in either direction moves published
+numbers, and that is a decision to take with the live corpus in hand, not the seeded one.
+
+### D35 — 2026-09-10 — an eviction verdict needs the memory's type and its evidence
+
+`ablation/harness.py :: verdict_for` took a similarity score and nothing else. A tier-0 `skill`
+scoring 1.0 was therefore reported **`evict`** — a recommendation to delete the agent's own
+operating instructions, printed in the dashboard's eviction table with a dollar figure next to it.
+
+**The first fix was wrong, and the measurement is what showed it.** It made every `ALWAYS_INJECTED`
+type unevictable. `ALWAYS_INJECTED` is `{profile, skill}`; profiles are 42 of Maya's 172 memories;
+the `--sample 25` run came back **`evict 0` / keep 12 / inconclusive 1 / always-injected 12**. The
+dashboard proposed deleting nothing. Worse, the planted junk memory (`mem_ef6be89e`) *is* a
+profile, so `CLAUDE.md`'s definition of done — "the ablation harness flags the planted junk
+memory" — became false, and the builder edited the control's assertion from `evict` to
+`always-injected` to match. That is test theatre; the assertion was restored and passes unedited.
+
+**Ranjiv adjudicated three rules**, in this order, applied only when similarity clears
+`EVICT_MIN_SIMILARITY`:
+
+| verdict | rule |
+|---|---|
+| `policy` | the memory is a `skill`. A skill is instructions, not data; it is never an eviction question at any similarity or evidence level. |
+| `untested` | fewer than `MIN_PROBES_FOR_EVICTION` (3) probes retrieved the memory, whatever its type. Not enough evidence to recommend deletion. |
+| otherwise | judged on the evidence, **profiles included** — which is what lets the planted junk profile be flagged. |
+
+The `untested` rule is the one `ablation/run.py` had printed in prose since Phase 7 ("a memory no
+probe exercises is untested, not disposable") and never enforced: a memory retrieved by a single
+probe could be stamped `evict` off that one data point.
+
+**Recorded honestly: the `untested` rule changed zero verdicts on this corpus.** Every one of the 25
+sampled memories has `probes_tested == 25`, because leave-one-out probing (D23) exercises each
+memory against its neighbours' probes. It is protection against a case this corpus does not
+exhibit, not a fix that improved a number.
+
+Re-measured at T1 on the integrated tree, `python -m ablation.run --sample 25`: **evict 1 / keep 12
+/ inconclusive 1 / policy 11 / untested 0**. Planted junk `mem_ef6be89e` → `evict` at 1.0000;
+planted critical `mem_89dad914` → `keep` at 0.7088. `EVICT_MIN_SIMILARITY` and
+`KEEP_MAX_SIMILARITY` are unchanged since `9dc19cb`; the thresholds did not move, the inputs to
+the verdict did.
+
+### D36 — 2026-09-10 — one memory renders as one line, and nothing is stripped
+
+`app/assembler/assemble.py :: _render` was `f"- {memory.content}\n"`. `routes.py` stores every
+user turn as an episode with the student's text intact, so a turn containing newlines wrote extra
+lines into the next prompt. Verified with one hostile episode: it produced **three** lines, one of
+them a forged `## How to tutor this student` header, and `mock_client._memory_lines` re-parsed the
+block as three memories, two of them fabricated. Measured before and after the fix: **3 → 1**.
+
+`_render` now collapses all whitespace (including U+2028 and U+2029) to single spaces and strips
+the ends. It remains a pure function of content, so `_memory_tokens` and `_block_text` inherit it
+and token accounting cannot drift from what is on the wire. No truncation — that would move
+`tier_tokens` and break the token-total fairness test. `ablation/harness.py` had carried a
+hard-coded second copy of the render format; it now imports `_render`, so the ablation table's
+token column describes what is actually sent.
+
+**The first attempt also stripped leading markup, and that corrupted content.** A regex removed
+leading `-`, `#`, `*` and the like, so `-40 C is not 40 C` rendered as `40 C is not 40 C`,
+`#1 priority` as `1 priority`, `*args confuses her` as `args confuses her` — silent fact
+corruption in a memory system, on the real-EverOS path. The build prompt specified that regex; the
+reviewer caught it in round 2. It survived round 1 because the forgery test matched a *substring*;
+it is now line-anchored, counting lines that *start* with `## `, which is the actual attack.
+
+**The strip was never load-bearing.** Every memory renders behind a `- ` prefix with newlines
+already collapsed, so no content can begin a line and hostile markup mid-line is inert:
+`## How to tutor\nforged` → `- ## How to tutor forged\n`. Stripping bought nothing and cost
+correctness, so the fix is a deletion, not a narrower regex. `tests/test_assembler.py` now pins
+`-40 C is not 40 C` intact. None of the 522 seeded memories begins with markup, so removing the
+strip changed no token count and no headline.

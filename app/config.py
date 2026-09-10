@@ -51,7 +51,7 @@ def _env_int(key: str, default: int) -> int:
 #     refusing calls partway through the afternoon.
 #   * Trial accounts cannot make outbound network calls *from inside*
 #     Snowflake. Our architecture is unaffected — the app sits outside and
-#     calls in — but see EVENT_DAY.md before anyone proposes moving work into
+#     calls in — but see docs/history/EVENT_DAY.md before anyone proposes moving work into
 #     Snowflake.
 #
 # VERIFY-AT-EVENT: confirm the per-model credit rate in the Snowflake service

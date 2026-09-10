@@ -88,7 +88,7 @@ FastAPI
    └── app/telemetry/   async, never in request path → Snowflake | SQLite
                                                              │
                              ablation/ (offline script) ──────┤
-                             sql/      (rollups, reconcile) ──┘
+                             sql/      (rollups) ──┘
 ```
 
 **Request path:** message → retrieve memories → assemble (`naive` | `tiered`) → infer → stream to
@@ -166,7 +166,7 @@ all root-level markdown, pyproject.toml, requirements.txt, .env.example, .gitign
 web/       React SPA — tutor chat, live cost meter, mode toggle, dashboard
 seed/      student generator, multi-week memory histories, fleet data
 ablation/  ablation harness + similarity scoring
-sql/       Snowflake DDL, ledger rollups, reconciliation queries
+sql/       Snowflake DDL, ledger rollups
 scripts/   run scripts, experiment runner helpers, warmup ping (except the two files above)
 ```
 
