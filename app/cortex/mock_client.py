@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
+import re
 import time
 from collections.abc import AsyncIterator
 
@@ -192,15 +194,37 @@ def _read_prompt(prompt: AssembledPrompt) -> tuple[list[str], str]:
         memories.extend(_memory_lines(text))
         for line in text.splitlines():
             stripped = line.strip()
-            if stripped and not stripped.startswith(("- ", "## ")):
+            if stripped and not (
+                _MEMORY_ELEMENT.match(stripped) or stripped.startswith(("## ", "### "))
+            ):
                 query_parts.append(stripped)
 
     # Sorted so the composer cannot depend on layout order.
-    return sorted(set(memories)), " ".join(query_parts)
+    return sorted(set(body for _, body in memories)), " ".join(query_parts)
 
 
-def _memory_lines(text: str) -> list[str]:
-    return [ln.strip()[2:] for ln in text.splitlines() if ln.strip().startswith("- ")]
+# Exactly the element `assemble._render` emits, anchored to the whole line.
+# Attribute order fixed; the body can hold no raw `<` or `>` because the
+# renderer escapes them, so the greedy `.*` cannot run past a forged close tag.
+_MEMORY_ELEMENT = re.compile(
+    r'<memory id="([^"]*)" type="([^"]*)" origin="(agent|user)">(.*)</memory>$'
+)
+
+
+def _memory_lines(text: str) -> list[tuple[str, str]]:
+    """`(memory_id, body)` for every well-formed memory element, in text order.
+
+    Anything that is not a whole-line, well-formed element is not a memory.
+    The previous parser treated any line starting `- ` as one, which is exactly
+    the re-parse a hostile memory exploited. The body is unescaped so the
+    composer sees the memory's real content, as a model would.
+    """
+    out: list[tuple[str, str]] = []
+    for ln in text.splitlines():
+        match = _MEMORY_ELEMENT.match(ln.strip())
+        if match:
+            out.append((html.unescape(match.group(1)), html.unescape(match.group(4))))
+    return out
 
 
 # ---------------------------------------------------------------------------

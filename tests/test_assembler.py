@@ -127,11 +127,13 @@ def test_both_modes_inject_exactly_the_same_memories(memories):
 def test_both_modes_carry_the_same_memory_text(memories):
     """Same information, different layout — no context is dropped to save money."""
     def bodies(prompt):
+        # The extraction helper knows the delimiter; the assertion below does
+        # not change when the delimiter does (MemoryLedger-EXECUTE.md, App. A).
         text = "".join(b.text for b in prompt.system_blocks)
         for msg in prompt.messages:
             c = msg["content"]
             text += c if isinstance(c, str) else "".join(p["text"] for p in c)
-        return {ln.strip()[2:] for ln in text.splitlines() if ln.strip().startswith("- ")}
+        return {body for _, body in _memory_lines(text)}
 
     naive = assemble(memories, user_message="q", mode="naive")
     tiered = assemble(memories, user_message="q", mode="tiered", registry=reg(), now=NOW)
