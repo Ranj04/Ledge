@@ -1036,3 +1036,49 @@ touched a real account; its `# VERIFY-AT-EVENT:` in `physical_shape` lists the t
 real `DESC TABLE` must confirm. The comparison strips the precision from Snowflake's type
 spelling (`VARCHAR(16777216)` → `VARCHAR`), so a precision change would pass; a type change
 would not, which is the divergence D37 actually found.
+
+### D39 — 2026-09-10 — the lifecycle asks the ledger for one statement, and an episode claim is one statement
+
+Sol's review of Track Q (`.review/q/1`) filed three MAJORs against `app/telemetry/lifecycle.py`.
+
+**F1 — dedup was a read followed by a write.** `should_write_episode` selected the last write
+for `(user, sha256(content))`, compared its timestamp with the window, then upserted. Twelve
+concurrent identical turns returned `True` five times in his run, two in mine — "probably one"
+where the contract is "exactly one". It is now one conditional upsert: `INSERT ... ON CONFLICT
+DO UPDATE SET ts = excluded.ts WHERE episode_writes.ts < <window start>` (a `MERGE` with `WHEN
+MATCHED AND` on Snowflake). It inserts when there is no row, updates when the row is older than
+the window, touches nothing otherwise, and the **affected-row count is the answer**: 1 claimed,
+0 not. The statement is atomic, so contention cannot split it. Measured: 12, 50 and 200
+concurrent calls, tables fresh and warm, three runs each — one `True` every time, no errors.
+The SQLite adapter runs in autocommit with no explicit transaction, deliberately: a write that
+meets another writer retries on the busy timeout only while the connection holds no snapshot,
+which is what `BEGIN IMMEDIATE` also relies on; the old shape (a read, then a write in the same
+connection) is the one where SQLite returns `SQLITE_BUSY` at once rather than deadlock.
+
+**F2 — every operation raised against the production ledger.** `_connect` needed `store.path`
+and `SnowflakeLedgerStore` has none, so `LEDGER_PROVIDER=snowflake` could propose, retire and
+deduplicate nothing. That was marked `VERIFY-AT-EVENT`, which was the wrong marker: it says an
+implementation is unverified, not that it is absent. The lifecycle now owns its two tables and
+its five statements and asks the store for exactly one thing — run a statement in your dialect,
+return rows and affected count (`LifecycleBackend`). Both stores are adapted inside
+`lifecycle.py` today (`path` for SQLite, `_session()` for Snowflake) because the store files are
+not this track's; `.sol/requests/q2-lifecycle-store-methods.md` names the two methods that make
+the stores carry the contract themselves, and `_backend` prefers those the moment they exist.
+The statements share text where Snowflake's case-folding lets them and differ only in the
+placeholder, the timestamp bind and the spelling of an upsert. The Snowflake path is written
+and driven against a fake of the session surface; it has never touched a real account and its
+two `VERIFY-AT-EVENT` items (MERGE `rowcount` semantics, the timestamp bind) are in the code
+and in `BLOCKERS.md`. The alternative — five higher-level methods on each store — would have
+put the SQL where the rest of the store's SQL lives, at the cost of a second copy of it during
+the handover; one `execute` is the smaller request and keeps the lifecycle's schema and queries
+in one file.
+
+**F3 — `probes_tested: int` was constructed with `None`.** The harness measures the count and
+`verdict_for` gates `evict` on it (D35), but `ablation_results` has no column for it and
+`migrations/` is off-limits this round. Declaring `int` and returning `None` was the lie; the
+honest shape is `int | None` with the reason on the field. `AblationResult.ledger_row` now
+carries `probes_tested`, both stores ignore a key their column list lacks, and
+`propose_evictions` selects `a.*` so the value arrives as an integer the moment 0002 lands —
+`tests/test_lifecycle.py` shows the `None` and the `25` on either side of an `ALTER TABLE`. The
+proposal's `reason` says "over 25 probes" or "over an unrecorded probe count", so a reader of
+the route sees which it is. Rows recorded before the column will stay `None`, correctly.
