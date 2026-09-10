@@ -18,19 +18,21 @@ from pathlib import Path
 from typing import Any
 
 from ablation.similarity import SimilarityScorer, scorer_from_env
-from app.assembler.assemble import assemble
+from app.assembler.assemble import _render, assemble
 from app.assembler.tiering import TierRegistry
 from app.config import make_cortex_client, make_everos_client, make_ledger_store
 from app.contracts import Memory
 from app.cortex.tokens import count_tokens
 from app.everos.mock_client import lexical_score, tokenize
-from app.memory_types import tier_for
+from app.memory_types import normalise, tier_for
 
 # Verdict policy lives in one place. Exact simulator matches score 1.0; the
 # planted load-bearing memory produced a materially lower lexical score in its
 # relevant planning probe, leaving a deliberate gap for uncertain cases.
 EVICT_MIN_SIMILARITY = 0.98
 KEEP_MAX_SIMILARITY = 0.90
+# Fewer observations cannot support a deletion recommendation.
+MIN_PROBES_FOR_EVICTION = 3
 
 CONVERSATIONS_PATH = Path("data/seed/conversations.json")
 NEIGHBOUR_PROBE_COUNT = 4
@@ -157,10 +159,19 @@ def build_probes(
     return list(dict.fromkeys(probes))
 
 
-def verdict_for(similarity: float | None) -> str:
+def verdict_for(
+    similarity: float | None,
+    *,
+    memory_type: str | None = None,
+    probes_tested: int | None = None,
+) -> str:
     if similarity is None:
         return "inconclusive"
     if similarity >= EVICT_MIN_SIMILARITY:
+        if memory_type is not None and normalise(memory_type, strict=False) == "skill":
+            return "policy"
+        if probes_tested is not None and probes_tested < MIN_PROBES_FOR_EVICTION:
+            return "untested"
         return "evict"
     if similarity <= KEEP_MAX_SIMILARITY:
         return "keep"
@@ -237,10 +248,27 @@ async def evaluate_memory(
     if measurements:
         worst = min(measurements, key=lambda item: item[0])
         similarity, prompt, baseline_answer, ablated_answer = worst
-        verdict = verdict_for(similarity)
-        note = ""
+        probes_tested = len(measurements)
+        verdict = verdict_for(
+            similarity,
+            memory_type=memory.memory_type,
+            probes_tested=probes_tested,
+        )
+        if verdict == "policy":
+            note = (
+                "A skill is the agent's own operating instructions, not a candidate for "
+                "eviction at any similarity."
+            )
+        elif verdict == "untested":
+            note = (
+                f"Only {probes_tested} probes retrieved this memory; too few to support a "
+                "deletion recommendation."
+            )
+        else:
+            note = ""
     else:
         similarity, prompt, baseline_answer, ablated_answer = None, "", "", ""
+        probes_tested = 0
         verdict = "inconclusive"
         note = (
             "Memory was not retrieved for any probe; it is untested, not disposable."
@@ -251,14 +279,14 @@ async def evaluate_memory(
         user_id=memory.user_id,
         memory_type=memory.memory_type,
         tier=tier_for(memory.memory_type) if tier is None else tier,
-        tokens=count_tokens(f"- {memory.content}\n"),
+        tokens=count_tokens(_render(memory)),
         monthly_cost_usd=float(monthly_cost_usd or 0.0),
         similarity=similarity,
         verdict=verdict,
         prompt=prompt,
         baseline_answer=baseline_answer,
         ablated_answer=ablated_answer,
-        probes_tested=len(measurements),
+        probes_tested=probes_tested,
         note=note,
     )
     if record:

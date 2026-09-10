@@ -128,6 +128,18 @@ async def main() -> None:
     )
     evict_total = sum(result.monthly_cost_usd for result in results if result.verdict == "evict")
     print(f"\nEviction candidates in tested set: ${evict_total:.2f}/month projected.")
+    policy = [result for result in results if result.verdict == "policy"]
+    policy_cost = sum(result.monthly_cost_usd for result in policy)
+    print(
+        f"Policy-excluded memories: {len(policy)} "
+        f"(${policy_cost:.2f}/month projected, not a saving)."
+    )
+    untested = [result for result in results if result.verdict == "untested"]
+    untested_cost = sum(result.monthly_cost_usd for result in untested)
+    print(
+        f"Untested memories: {len(untested)} "
+        f"(${untested_cost:.2f}/month projected, not a saving)."
+    )
     print(f"Coverage: tested {len(selected)} of {len(memories)} memories; {scope} run.")
 
 
