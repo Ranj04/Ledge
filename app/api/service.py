@@ -60,13 +60,37 @@ class Session:
         }
 
 
+class SessionStore(dict[tuple[str, str], Session]):
+    """Tenant-scoped session map with legacy read access for diagnostics/tests."""
+
+    def _legacy_key(self, session_id: str) -> tuple[str, str] | None:
+        return next(
+            (key for key in reversed(self) if key[1] == session_id),
+            None,
+        )
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            scoped = self._legacy_key(key)
+            if scoped is None:
+                raise KeyError(key)
+            key = scoped
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+
 class Service:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.everos = make_everos_client()
         self.cortex = make_cortex_client()
         self.ledger = make_ledger_store()
-        self.sessions: dict[str, Session] = {}
+        self.sessions = SessionStore()
         self._students_meta = _load_students_meta()
         self._conversations = _load_json(CONVERSATIONS_PATH, {}).get("conversations", [])
 
@@ -81,20 +105,22 @@ class Service:
         history, cache namespace and running totals — that would leak one
         student's conversation into another's prompt and mis-attribute the cost.
         """
-        existing = self.sessions.get(session_id)
-        if existing is not None and existing.user_id == user_id:
+        key = (user_id, session_id)
+        existing = self.sessions.get(key)
+        if existing is not None:
             return existing
-        if existing is not None and hasattr(self.cortex, "reset"):
-            # The provider cache is keyed by session id too; drop the previous
-            # owner's prefixes so nothing of theirs can be read back.
-            self.cortex.reset(session_id)
         created = Session(
             session_id=session_id,
             user_id=user_id,
             registry=TierRegistry(stability_n=self.settings.promotion_stability_n),
         )
-        self.sessions[session_id] = created
+        self.sessions[key] = created
         return created
+
+    @staticmethod
+    def provider_session_id(user_id: str, session_id: str) -> str:
+        """Namespace provider-side cache state by the authenticated tenant."""
+        return f"{user_id}:{session_id}"
 
     # -- read-only views ---------------------------------------------------
 
@@ -109,8 +135,9 @@ class Service:
     def fleet(self) -> dict:
         return _load_json(FLEET_PATH, {"tenants": []})
 
-    async def memories(self, user_id: str) -> list[Memory]:
-        return await self.everos.all_for_user(user_id=user_id)
+    async def memories(self, tenant_id: str) -> list[Memory]:
+        """Return only rows for the identity established at the HTTP boundary."""
+        return await self.everos.all_for_user(user_id=tenant_id)
 
 
 def _load_json(path: Path, default):

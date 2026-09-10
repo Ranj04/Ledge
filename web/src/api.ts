@@ -12,8 +12,12 @@ import type {
 } from './types'
 
 async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
+  const key = localStorage.getItem('memoryledger-api-key')
+  const headers = new Headers(init?.headers)
+  if (key) headers.set('X-API-Key', key)
+  const response = await fetch(url, { ...init, headers })
   if (!response.ok) {
+    if (response.status === 401) window.dispatchEvent(new Event('memoryledger-auth-required'))
     let detail = `${response.status} ${response.statusText}`
     try {
       const body = (await response.json()) as { detail?: string }
@@ -28,10 +32,8 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const getStatus = () => jsonRequest<Status>('/api/status')
 export const getStudents = () => jsonRequest<Student[]>('/api/students')
-export const getMemoryCosts = (userId: string) =>
-  jsonRequest<MemoryCost[]>(`/api/ledger/memory-costs?user_id=${encodeURIComponent(userId)}&days=30`)
-export const getMemories = (userId: string) =>
-  jsonRequest<MemoryBody[]>(`/api/memories?user_id=${encodeURIComponent(userId)}`)
+export const getMemoryCosts = () => jsonRequest<MemoryCost[]>('/api/ledger/memory-costs?days=30')
+export const getMemories = () => jsonRequest<MemoryBody[]>('/api/memories')
 export const getCacheByTier = () => jsonRequest<CacheTierRow[]>('/api/ledger/cache-by-tier')
 export const getAblations = () => jsonRequest<AblationResponse>('/api/ledger/ablation')
 export const getFleet = () => jsonRequest<FleetResponse>('/api/ledger/fleet')
@@ -44,7 +46,12 @@ export function inspectPrompt(
 ) {
   return jsonRequest<InspectResponse>('/api/inspect', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(localStorage.getItem('memoryledger-api-key')
+        ? { 'X-API-Key': localStorage.getItem('memoryledger-api-key') as string }
+        : {}),
+    },
     body: JSON.stringify({ user_id: userId, message, session_id: sessionId }),
     signal,
   })
@@ -62,11 +69,17 @@ export async function streamChat(
 ) {
   const response = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(localStorage.getItem('memoryledger-api-key')
+        ? { 'X-API-Key': localStorage.getItem('memoryledger-api-key') as string }
+        : {}),
+    },
     body: JSON.stringify(body),
   })
 
   if (!response.ok) {
+    if (response.status === 401) window.dispatchEvent(new Event('memoryledger-auth-required'))
     let detail = `${response.status} ${response.statusText}`
     try {
       const payload = (await response.json()) as { detail?: string }

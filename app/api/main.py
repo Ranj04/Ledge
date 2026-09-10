@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,9 +13,12 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.limits import RateLimiter, SpendCeiling
 from app.api.routes import router
 from app.api.service import get_service
 from app.config import get_settings
+from app.cortex import tokens
+from app.logging_setup import configure, request_id_var
 
 # Absolute, and overridable. app/api/main.py -> app/api -> app -> repo root is
 # three parents. Relative here meant that `python -m app` from any directory but
@@ -23,11 +28,14 @@ WEB_DIST = Path(
     os.environ.get("WEB_DIST", Path(__file__).resolve().parent.parent.parent / "web" / "dist")
 ).resolve()
 
+_READY_TTL_SECONDS = 5.0
+_ready_cache: tuple[int, float, dict[str, str], int] | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    logging.basicConfig(level=settings.log_level)
+    configure(settings.log_level)
     logging.getLogger("memoryledger").info(
         "providers: cortex=%s everos=%s ledger=%s model=%s",
         settings.cortex_provider,
@@ -35,6 +43,10 @@ async def lifespan(app: FastAPI):
         settings.ledger_provider,
         settings.cortex_model,
     )
+    if not os.environ.get("API_KEYS", "").strip():
+        logging.getLogger("memoryledger").warning(
+            "authentication is in open mode; set API_KEYS to require credentials"
+        )
     if not WEB_DIST.exists():
         logging.getLogger("memoryledger").warning(
             "no UI: %s does not exist, serving the JSON fallback at / "
@@ -46,12 +58,64 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MemoryLedger", lifespan=lifespan)
+app.add_middleware(SpendCeiling)
+app.add_middleware(RateLimiter)
+
+
+@app.middleware("http")
+async def request_ids(request, call_next):
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    token = request_id_var.set(request_id)
+    request.state.request_id = request_id
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        request_id_var.reset(token)
+
+
 app.include_router(router)
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready():
+    global _ready_cache
+    service = get_service()
+    now = time.monotonic()
+    if (
+        _ready_cache is not None
+        and _ready_cache[0] == id(service)
+        and now - _ready_cache[1] < _READY_TTL_SECONDS
+    ):
+        return JSONResponse(_ready_cache[2], status_code=_ready_cache[3])
+
+    checks: dict[str, str] = {}
+    try:
+        checks["everos"] = "ok" if service.everos is not None else "unavailable"
+    except Exception as exc:
+        checks["everos"] = type(exc).__name__
+    try:
+        # Startup owns schema creation. Readiness only proves that the already
+        # initialized ledger can answer a cheap read without mutating it.
+        await service.ledger.call_summary()
+        checks["ledger"] = "ok"
+    except Exception as exc:
+        checks["ledger"] = type(exc).__name__
+    try:
+        tokens._encoder()
+        checks["tokenizer"] = "ok"
+    except Exception as exc:
+        checks["tokenizer"] = type(exc).__name__
+    status_code = 200 if all(value == "ok" for value in checks.values()) else 503
+    payload = {"status": "ready" if status_code == 200 else "not ready", "checks": checks}
+    _ready_cache = (id(service), now, payload, status_code)
+    return JSONResponse(payload, status_code=status_code)
 
 
 if WEB_DIST.exists():

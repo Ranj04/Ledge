@@ -53,6 +53,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      HOST: 0.0.0.0
       CORTEX_PROVIDER: ${CORTEX_PROVIDER:-sim}
       EVEROS_PROVIDER: ${EVEROS_PROVIDER:-sim}
       LEDGER_PROVIDER: ${LEDGER_PROVIDER:-sqlite}

@@ -10,23 +10,32 @@ before the user saw a word.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app import memory_types
+from app.api import auth
+from app.api.auth import Principal
+from app.api.limits import SpendCeiling
 from app.api.schemas import ChatRequest, InspectRequest
 from app.api.service import Service, get_service
 from app.assembler.assemble import assemble
 from app.assembler.tiering import TIER_NAMES, TIER_SOURCE, TierRegistry
 from app.contracts import AssembledPrompt, Usage
 from app.cortex.tokens import count_tokens
+from app.logging_setup import request_id_var
 from app.telemetry.cost import build_records
 
+logger = logging.getLogger("memoryledger")
+Authenticated = Annotated[Principal, Depends(auth.resolve)]
+
 router = APIRouter(prefix="/api")
+MAX_OUTPUT_TOKENS = 960
 
 
 def svc() -> Service:
@@ -73,16 +82,22 @@ async def status() -> dict[str, Any]:
 
 
 @router.get("/students")
-async def students() -> list[dict[str, Any]]:
-    return svc().students()
+async def students(principal: Authenticated) -> list[dict[str, Any]]:
+    rows = svc().students()
+    return (
+        rows if principal.admin else [row for row in rows if row["user_id"] == principal.tenant_id]
+    )
 
 
 @router.get("/starters")
-async def starters(user_id: str | None = None) -> list[dict[str, Any]]:
+async def starters(principal: Authenticated) -> list[dict[str, Any]]:
     return [
-        {"conversation_id": c["conversation_id"], "title": c.get("title", ""),
-         "turns": c.get("turns", [])}
-        for c in svc().conversations(user_id)
+        {
+            "conversation_id": c["conversation_id"],
+            "title": c.get("title", ""),
+            "turns": c.get("turns", []),
+        }
+        for c in svc().conversations(None if principal.admin else principal.tenant_id)
     ]
 
 
@@ -96,12 +111,18 @@ def _sse(event: str, payload: dict) -> str:
 
 
 @router.post("/chat")
-async def chat(req: ChatRequest, background: BackgroundTasks) -> StreamingResponse:
+async def chat(
+    req: ChatRequest,
+    background: BackgroundTasks,
+    request: Request,
+    principal: Authenticated,
+) -> StreamingResponse:
     service = svc()
-    session = service.session(req.session_id, req.user_id)
+    user_id = principal.tenant_id
+    session = service.session(req.session_id, user_id)
 
     memories = await service.everos.retrieve(
-        user_id=req.user_id, query=req.message, session_id=req.session_id
+        user_id=user_id, query=req.message, session_id=req.session_id
     )
     if not memories and not service.students():
         raise HTTPException(404, "no seed data — run `python -m seed.generate`")
@@ -114,6 +135,17 @@ async def chat(req: ChatRequest, background: BackgroundTasks) -> StreamingRespon
         registry=session.registry,
         session_id=req.session_id,
     )
+    # Reserve the bounded worst case before entering model generation. Every
+    # prompt token could be a cache write; output is explicitly capped below.
+    pricing = service.settings.pricing
+    estimate = (
+        prompt.total_prompt_tokens_estimate() * pricing.cache_write_per_mtok
+        + MAX_OUTPUT_TOKENS * pricing.output_per_mtok
+    ) / 1e6
+    minimum_estimate = prompt.total_prompt_tokens_estimate() * pricing.input_per_mtok / 1e6
+    limiter: SpendCeiling = request.app.state.spend_ceiling
+    reservation_id = await limiter.reserve(principal, estimate, minimum_estimate)
+    captured_request_id = request_id_var.get()
 
     async def generate() -> AsyncIterator[str]:
         started = time.perf_counter()
@@ -122,7 +154,12 @@ async def chat(req: ChatRequest, background: BackgroundTasks) -> StreamingRespon
         latency_ms = 0.0
 
         try:
-            async for event in service.cortex.stream(prompt, session_id=req.session_id):
+            provider_session_id = service.provider_session_id(user_id, req.session_id)
+            async for event in service.cortex.stream(
+                prompt,
+                session_id=provider_session_id,
+                max_tokens=MAX_OUTPUT_TOKENS,
+            ):
                 if event.kind == "text":
                     text_parts.append(event.text)
                     yield _sse("text", {"text": event.text})
@@ -130,13 +167,20 @@ async def chat(req: ChatRequest, background: BackgroundTasks) -> StreamingRespon
                     usage = event.result.usage
                     latency_ms = event.result.latency_ms
                 elif event.kind == "error":
+                    await limiter.reconcile(principal, reservation_id, 0.0)
                     yield _sse("error", {"detail": event.text})
                     return
-        except Exception as exc:  # a provider failure must not hang the browser
+        except BaseException as exc:
+            await limiter.reconcile(principal, reservation_id, 0.0)
+            if not isinstance(exc, Exception):
+                raise
+            # A provider failure must not hang the browser.
+            logger.exception("provider stream failed")
             yield _sse("error", {"detail": f"{type(exc).__name__}: {exc}"})
             return
 
         if usage is None:
+            await limiter.reconcile(principal, reservation_id, 0.0)
             yield _sse("error", {"detail": "provider returned no usage"})
             return
 
@@ -145,7 +189,7 @@ async def chat(req: ChatRequest, background: BackgroundTasks) -> StreamingRespon
             prompt,
             usage,
             session_id=req.session_id,
-            user_id=req.user_id,
+            user_id=user_id,
             latency_ms=latency_ms or (time.perf_counter() - started) * 1000,
         )
 
@@ -153,9 +197,36 @@ async def chat(req: ChatRequest, background: BackgroundTasks) -> StreamingRespon
         session.history.append({"role": "assistant", "content": answer})
         session.record(call)
 
-        # Everything below this line happens after the browser has the answer.
-        background.add_task(_persist, service, call, injections, req, memories)
+        # key_id is a digest prefix only; never log the API token or raw user id.
+        logger.info(
+            "turn completed",
+            extra={
+                "call_id": call.call_id,
+                "session_id": req.session_id,
+                "key_id": principal.key_id,
+                "mode": call.mode,
+                "input_tokens": call.input_tokens,
+                "cached_tokens": call.cached_tokens,
+                "cost_usd": call.cost_usd,
+                "latency_ms": call.latency_ms,
+                "request_id": captured_request_id,
+            },
+        )
 
+        # Everything below this line happens after the browser has the answer.
+        background.add_task(
+            _persist,
+            service,
+            call,
+            injections,
+            req,
+            memories,
+            user_id,
+            limiter,
+            principal,
+            reservation_id,
+            captured_request_id,
+        )
         yield _sse("done", _done_payload(call, prompt, usage, session.totals()))
 
     return StreamingResponse(
@@ -190,47 +261,61 @@ def _done_payload(call, prompt: AssembledPrompt, usage: Usage, totals: dict) -> 
 
 
 async def _persist(
-    service: Service, call, injections, req: ChatRequest, memories: list
+    service: Service,
+    call,
+    injections,
+    req: ChatRequest,
+    memories: list,
+    user_id: str,
+    limiter: SpendCeiling,
+    principal: Principal,
+    reservation_id: str,
+    captured_request_id: str,
 ) -> None:
-    await service.ledger.record_call(call, injections)
-
-    session = service.sessions.get(req.session_id)
-    if session is None:
-        return
-
-    # Registry rows come from the memories this call actually retrieved, not
-    # from a lookup on the client — `get` only exists on the simulator, so
-    # looking up would silently write nothing against real EverOS. One bulk
-    # write, not one connection per memory.
-    rows = []
-    for memory in memories:
-        state = session.registry.state(memory.memory_id)
-        if state is None:
-            continue
-        rows.append(
-            {
-                "memory_id": memory.memory_id,
-                "user_id": req.user_id,
-                "memory_type": memory.memory_type,
-                "content_hash": state.content_hash,
-                "tier": state.tier,
-                "stable_calls": state.stable_calls,
-                "tokens": count_tokens(f"- {memory.content}\n"),
-            }
+    token = request_id_var.set(captured_request_id)
+    try:
+        await limiter.reconcile(principal, reservation_id, call.cost_usd)
+        await service.ledger.record_call(call, injections)
+        logger.info(
+            "background ledger write completed",
+            extra={"call_id": call.call_id, "request_id": captured_request_id},
         )
-    if rows:
-        await service.ledger.upsert_memories(rows)
 
-    # The turn itself becomes an episodic memory — this is what makes the agent
-    # remember across sessions, and what generates the memory pressure the
-    # ledger exists to measure.
-    await service.everos.write(
-        user_id=req.user_id,
-        memory_type="episode",
-        content=f"Student asked: {req.message[:200]}",
-        session_id=req.session_id,
-        metadata={"call_id": call.call_id, "source": "live-session"},
-    )
+        session = service.sessions.get((user_id, req.session_id))
+        if session is None:
+            return
+
+        # Registry rows come from the memories this call actually retrieved, not
+        # from a lookup on the client — `get` only exists on the simulator.
+        rows = []
+        for memory in memories:
+            state = session.registry.state(memory.memory_id)
+            if state is None:
+                continue
+            rows.append(
+                {
+                    "memory_id": memory.memory_id,
+                    "user_id": user_id,
+                    "memory_type": memory.memory_type,
+                    "content_hash": state.content_hash,
+                    "tier": state.tier,
+                    "stable_calls": state.stable_calls,
+                    "tokens": count_tokens(f"- {memory.content}\n"),
+                }
+            )
+        if rows:
+            await service.ledger.upsert_memories(rows)
+
+        # The turn itself becomes an episodic memory.
+        await service.everos.write(
+            user_id=user_id,
+            memory_type="episode",
+            content=f"Student asked: {req.message[:200]}",
+            session_id=req.session_id,
+            metadata={"call_id": call.call_id, "source": "live-session"},
+        )
+    finally:
+        request_id_var.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -239,14 +324,14 @@ async def _persist(
 
 
 @router.post("/inspect")
-async def inspect(req: InspectRequest) -> dict[str, Any]:
+async def inspect(req: InspectRequest, principal: Authenticated) -> dict[str, Any]:
     """Dry run: build both layouts for the same message and the same memory set.
 
     Deliberately does not touch the live session's cache or the ledger — an
     inspector that warmed the cache would change the thing it is inspecting.
     """
     service = svc()
-    memories = await service.everos.retrieve(user_id=req.user_id, query=req.message)
+    memories = await service.everos.retrieve(user_id=principal.tenant_id, query=req.message)
 
     # A throwaway registry seeded from the live session's tier state, so the
     # inspector shows the tiers the next real call would use.
@@ -256,9 +341,11 @@ async def inspect(req: InspectRequest) -> dict[str, Any]:
     # objects meant three inspector calls could promote a memory into a cached
     # tier without a single model call ever happening — the dry run silently
     # changing the thing it claims to be previewing.
-    live = service.sessions.get(req.session_id)
-    registry = live.registry.snapshot() if live is not None else TierRegistry(
-        stability_n=service.settings.promotion_stability_n
+    live = service.sessions.get((principal.tenant_id, req.session_id))
+    registry = (
+        live.registry.snapshot()
+        if live is not None
+        else TierRegistry(stability_n=service.settings.promotion_stability_n)
     )
 
     out = {}
@@ -276,9 +363,7 @@ async def inspect(req: InspectRequest) -> dict[str, Any]:
     return {
         "message": req.message,
         "memory_count": len(memories),
-        "tiers": {
-            str(t): {"name": TIER_NAMES[t], "source": TIER_SOURCE[t]} for t in (0, 1, 2, 3)
-        },
+        "tiers": {str(t): {"name": TIER_NAMES[t], "source": TIER_SOURCE[t]} for t in (0, 1, 2, 3)},
         "modes": out,
     }
 
@@ -287,11 +372,13 @@ def _message_label(role: str, carries: list[int]) -> str:
     if not carries:
         return f"{role} message"
     names = " + ".join(TIER_NAMES[t] for t in carries)
-    span = "–".join(str(t) for t in (carries[0], carries[-1])) if len(carries) > 1 else str(
-        carries[0]
+    span = (
+        "–".join(str(t) for t in (carries[0], carries[-1])) if len(carries) > 1 else str(carries[0])
     )
-    return f"Tiers {span} + question · {names}" if len(carries) > 1 else (
-        f"Tier {span} + question · {names}"
+    return (
+        f"Tiers {span} + question · {names}"
+        if len(carries) > 1
+        else (f"Tier {span} + question · {names}")
     )
 
 
@@ -332,9 +419,7 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
     messages = []
     for msg in prompt.messages:
         content = msg["content"]
-        parts = (
-            [{"text": content}] if isinstance(content, str) else content
-        )
+        parts = [{"text": content}] if isinstance(content, str) else content
         for j, part in enumerate(parts):
             # Count exactly what `flatten_prompt` bills, role marker included —
             # the inspector must not display a total the simulator disagrees
@@ -382,26 +467,38 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
 
 
 @router.get("/session/{session_id}/summary")
-async def session_summary(session_id: str) -> dict[str, Any]:
-    return await svc().ledger.call_summary(session_id=session_id)
+async def session_summary(session_id: str, principal: Authenticated) -> dict[str, Any]:
+    session = svc().sessions.get((principal.tenant_id, session_id))
+    if not principal.admin and (session is None or session.user_id != principal.tenant_id):
+        raise HTTPException(403, "session belongs to another tenant")
+    return await svc().ledger.call_summary(
+        session_id=session_id,
+        user_id=None if principal.admin else principal.tenant_id,
+    )
 
 
 @router.post("/session/{session_id}/reset")
-async def session_reset(session_id: str) -> dict[str, str]:
+async def session_reset(session_id: str, principal: Authenticated) -> dict[str, str]:
     service = svc()
-    service.sessions.pop(session_id, None)
+    key = (principal.tenant_id, session_id)
+    session = service.sessions.get(key)
+    if not principal.admin and (session is None or session.user_id != principal.tenant_id):
+        raise HTTPException(403, "session belongs to another tenant")
+    service.sessions.pop(key, None)
     if hasattr(service.cortex, "reset"):
-        service.cortex.reset(session_id)
+        service.cortex.reset(service.provider_session_id(principal.tenant_id, session_id))
     return {"status": "reset", "session_id": session_id}
 
 
 @router.get("/ledger/memory-costs")
-async def memory_costs(user_id: str | None = None, days: int = 30) -> list[dict[str, Any]]:
-    return await svc().ledger.memory_costs(user_id=user_id, days=days)
+async def memory_costs(principal: Authenticated, days: int = 30) -> list[dict[str, Any]]:
+    return await svc().ledger.memory_costs(user_id=principal.tenant_id, days=days)
 
 
 @router.get("/ledger/cache-by-tier")
-async def cache_by_tier() -> list[dict[str, Any]]:
+async def cache_by_tier(principal: Authenticated) -> list[dict[str, Any]]:
+    if not principal.admin:
+        raise HTTPException(403, "admin key required")
     store = svc().ledger
     if not hasattr(store, "cache_hit_by_tier"):
         return []
@@ -412,29 +509,38 @@ async def cache_by_tier() -> list[dict[str, Any]]:
 
 
 @router.get("/ledger/calls")
-async def recent_calls(limit: int = 50) -> list[dict[str, Any]]:
+async def recent_calls(principal: Authenticated, limit: int = 50) -> list[dict[str, Any]]:
+    if not principal.admin:
+        raise HTTPException(403, "admin key required")
     return await svc().ledger.recent_calls(limit=limit)
 
 
 @router.get("/ledger/fleet")
-async def fleet() -> dict[str, Any]:
+async def fleet(principal: Authenticated) -> dict[str, Any]:
+    if not principal.admin:
+        raise HTTPException(403, "admin key required")
     data = svc().fleet()
     data["provenance"] = "seeded"
     return data
 
 
 @router.get("/ledger/ablation")
-async def ablation_results() -> dict[str, Any]:
+async def ablation_results(
+    principal: Authenticated,
+) -> dict[str, Any]:
+    if not principal.admin:
+        raise HTTPException(403, "admin key required")
     store = svc().ledger
     rows = await store.ablation_results() if hasattr(store, "ablation_results") else []
     return {"results": rows, "provenance": "live" if svc().settings.is_live else "simulated"}
 
 
 @router.get("/memories")
-async def memories(user_id: str) -> list[dict[str, Any]]:
+async def memories(principal: Authenticated) -> list[dict[str, Any]]:
     return [
         {
             "memory_id": m.memory_id,
+            "user_id": principal.tenant_id,
             "memory_type": m.memory_type,
             "natural_tier": memory_types.tier_for(m.memory_type),
             "content": m.content,
@@ -442,5 +548,5 @@ async def memories(user_id: str) -> list[dict[str, Any]]:
             "updated_at": m.updated_at,
             "metadata": m.metadata,
         }
-        for m in await svc().memories(user_id)
+        for m in await svc().memories(principal.tenant_id)
     ]

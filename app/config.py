@@ -150,6 +150,17 @@ class Settings:
     port: int = field(default_factory=lambda: _env_int("PORT", 8000))
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", "INFO"))
 
+    # Track P, phase 2: per-principal HTTP request and spend limits.
+    rate_limit_per_minute: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_PER_MINUTE", 60)
+    )
+    spend_ceiling_usd: float = field(
+        default_factory=lambda: float(_env("SPEND_CEILING_USD", "5.00"))
+    )
+    spend_window_hours: int = field(
+        default_factory=lambda: _env_int("SPEND_WINDOW_HOURS", 24)
+    )
+
     @property
     def active_model(self) -> str:
         """The model actually serving inference, whichever provider is selected."""
