@@ -33,7 +33,7 @@ Nothing here needs a human decision any more. `SNOWFLAKE_PAT` is set and verifie
 `OPENAI_API_KEY` is set.
 
 ```bash
-cd /Users/ranjivj/mem
+cd <repository-root>
 git check-ignore -v .env    # must print a match
 git status --short          # must NOT list .env
 ```
@@ -58,7 +58,7 @@ token name — `cacheguard` already exists and the statement fails on a duplicat
 ## Step 1 — Prove the machine is sound (3 min, no network needed)
 
 ```bash
-cd /Users/ranjivj/mem
+cd <repository-root>
 .venv/bin/python -m pytest -q          # expect 118 passed
 .venv/bin/pytest ablation/ -q          # expect 5 passed
 cd web && npm run build && cd ..

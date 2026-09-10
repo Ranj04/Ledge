@@ -27,7 +27,7 @@ services:
       - "8077:8000"
     environment:
       # EverOS runs its own extraction pipeline, so it needs its own model
-      # keys. THESE ARE OURS, NOT SPONSOR KEYS — see MORNING_STATUS.md.
+      # keys. THESE ARE OURS, NOT SPONSOR KEYS — see docs/history/MORNING_STATUS.md.
       EVEROS_LLM__API_KEY: ${EVEROS_LLM__API_KEY:?set this in .env}
       EVEROS_EMBEDDING__API_KEY: ${EVEROS_EMBEDDING__API_KEY:?set this in .env}
       EVEROS_MULTIMODAL__API_KEY: ${EVEROS_MULTIMODAL__API_KEY:-}

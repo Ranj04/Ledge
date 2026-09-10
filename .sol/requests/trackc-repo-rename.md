@@ -1,0 +1,1 @@
+The repository is `Ranj04/Ledge`, while every in-repository name is now `MemoryLedger` for the product or `memoryledger` for identifiers. Renaming the remote is a one-click GitHub operation that preserves redirects, but it is Ranjiv's call and nobody should do it unasked.

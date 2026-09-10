@@ -1,5 +1,7 @@
 # MemoryLedger
 
+> The product is **MemoryLedger**. The repository is named `Ledge`; the Python distribution is `memoryledger`.
+
 **An agent that remembers more, should not cost more.**
 
 Two pieces of infrastructure, demonstrated under a study tutor.
@@ -88,6 +90,10 @@ CORTEX_PROVIDER=openai .venv/bin/python scripts/experiment.py --runs 4
   prompt size   naive 28,425 tok   tiered 28,530 tok   (same content, different layout)
 ```
 
+Machine-readable runs: [`results/`](results/).
+
+**The hit rate is measured against the whole prompt.** `cache_hit_rate` is `cached_tokens / input_tokens`, and `input_tokens` is the *total* prompt — cached, written, and the current turn, which can never be cached. Dividing by the cacheable region instead would produce a larger number; this is the conservative framing and `/api/chat` and the session totals use it identically.
+
 **The baseline is not denied anything.** Caching on this provider is implicit and on by default, so
 `naive` has it too — and still measures **0.0%**, because memories retrieved per turn sit at the
 front of the prompt and change every turn. The same memories ordered stable-first cache 47.9%.
@@ -144,6 +150,14 @@ D6.
 
 ---
 
+## Where things are
+
+- [`README.md`](README.md) — the product, evidence, and local run path.
+- [`DECISIONS.md`](DECISIONS.md) — the recorded technical reasoning.
+- [`BLOCKERS.md`](BLOCKERS.md) — limitations, corrections, and unresolved work.
+- [`results/`](results/) — machine-readable measurement artifacts and provenance.
+- [`docs/history/`](docs/history/) — working documents retained from the overnight build.
+
 ## Layout
 
 ```
@@ -190,7 +204,7 @@ nothing caches unless a breakpoint says so, placement is load-bearing and the br
 
 ## Going live
 
-`EVENT_DAY.md` is the ordered checklist: which environment variables to set, in what order, what to
+`docs/history/EVENT_DAY.md` is the ordered checklist: which environment variables to set, in what order, what to
 run to verify each provider, and what output to expect at each step. Start with
 `tests/probe_openai_live.py`, which checks the cache mechanic and then the layout effect over a
 real conversation, and exits non-zero if either fails.
@@ -211,6 +225,6 @@ works — `CORTEX_PROVIDER=real` is the entire change if the entitlement appears
 |---|---|
 | `DECISIONS.md` | Every ambiguous call and why |
 | `BLOCKERS.md` | What could not be verified without credentials |
-| `EVENT_DAY.md` | Ordered go-live checklist |
-| `DEMO.md` | The 3-minute script |
-| `HANDOFF.md` | Interface changes and cross-agent requests |
+| `docs/history/EVENT_DAY.md` | Ordered go-live checklist |
+| `docs/history/DEMO.md` | The 3-minute script |
+| `docs/history/HANDOFF.md` | Interface changes and cross-agent requests |

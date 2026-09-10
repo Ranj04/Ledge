@@ -236,9 +236,9 @@ Write these as you go, not at the end.
 |---|---|
 | `DECISIONS.md` | Every ambiguous call you made and why. Append-only, dated. |
 | `BLOCKERS.md` | What could not be done tonight, what was tried, what it needs. |
-| `HANDOFF.md` | Cross-agent requests and interface changes. |
-| `EVENT_DAY.md` | Ordered checklist for a tired person: env vars, verification commands, expected output, every `# VERIFY-AT-EVENT:` location. |
-| `DEMO.md` | The 3-minute script with timings. |
+| `docs/history/HANDOFF.md` | Historical cross-agent requests and interface changes. |
+| `docs/history/EVENT_DAY.md` | Ordered checklist for a tired person: env vars, verification commands, expected output, every `# VERIFY-AT-EVENT:` location. |
+| `docs/history/DEMO.md` | The 3-minute script with timings. |
 | `README.md` | How to run locally in 60 seconds. |
 
 ---
@@ -252,4 +252,4 @@ Write these as you go, not at the end.
 - `scripts/experiment.py` prints a real distribution over N runs.
 - The ablation harness flags the planted junk memory and **not** the planted critical one.
 - Real Snowflake and EverOS clients are written, unexercised, every uncertain line marked.
-- `EVENT_DAY.md` tells a tired person exactly what to do in what order.
+- `docs/history/EVENT_DAY.md` tells a tired person exactly what to do in what order.
