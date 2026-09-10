@@ -204,7 +204,7 @@ nothing caches unless a breakpoint says so, placement is load-bearing and the br
 
 ## Going live
 
-`EVENT_DAY.md` is the ordered checklist: which environment variables to set, in what order, what to
+`docs/history/EVENT_DAY.md` is the ordered checklist: which environment variables to set, in what order, what to
 run to verify each provider, and what output to expect at each step. Start with
 `tests/probe_openai_live.py`, which checks the cache mechanic and then the layout effect over a
 real conversation, and exits non-zero if either fails.
@@ -225,6 +225,6 @@ works — `CORTEX_PROVIDER=real` is the entire change if the entitlement appears
 |---|---|
 | `DECISIONS.md` | Every ambiguous call and why |
 | `BLOCKERS.md` | What could not be verified without credentials |
-| `EVENT_DAY.md` | Ordered go-live checklist |
-| `DEMO.md` | The 3-minute script |
-| `HANDOFF.md` | Interface changes and cross-agent requests |
+| `docs/history/EVENT_DAY.md` | Ordered go-live checklist |
+| `docs/history/DEMO.md` | The 3-minute script |
+| `docs/history/HANDOFF.md` | Interface changes and cross-agent requests |

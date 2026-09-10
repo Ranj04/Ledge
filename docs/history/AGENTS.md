@@ -1,3 +1,5 @@
+This is a historical record from the overnight build; current ownership lives in `MemoryLedger-EXECUTE.md`.
+
 # MemoryLedger — instructions for Codex
 
 You are **Sol**. You build alongside **Fable** (Claude Code), who launches you via

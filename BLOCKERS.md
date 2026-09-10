@@ -155,13 +155,13 @@ The third returns `token_name` / `token_secret`. **The secret displays once.** I
 is deliberate; the token outlives the event and nothing more. `0.0.0.0/0` is open on purpose:
 pinning an IP now means a 401 on venue wifi tomorrow, on a 30-day trial with no card attached.
 
-Then `EVENT_DAY.md` step 1 runs end to end unattended.
+Then `docs/history/EVENT_DAY.md` step 1 runs end to end unattended.
 
 **What remains genuinely unknown until then**, and it is not a small one: whether prompt caching
 survives **cross-region inference**. There are no Claude models in us-east-2, so calls must route
 via `CORTEX_ENABLED_CROSS_REGION = 'AWS_US'`, and no documentation states whether cache affinity is
 preserved across that routing. If it is not, `cached_tokens` returns zero with no error to explain
-it. `EVENT_DAY.md` step 1 has the escalation order and the honest fallback.
+it. `docs/history/EVENT_DAY.md` step 1 has the escalation order and the honest fallback.
 
 ## 2026-08-07 — EverOS extraction returns Spanish for English input
 
@@ -197,7 +197,7 @@ resolved by one of:
    session, not at 3pm.**
 2. Convert the trial to a paid account by adding a card. Likely unlocks it; unverified, and it
    spends real money.
-3. Demo against the simulator and say so. Already scripted in `EVENT_DAY.md` and `DEMO.md`.
+3. Demo against the simulator and say so. Already scripted in `docs/history/EVENT_DAY.md` and `docs/history/DEMO.md`.
 
 If the entitlement is granted, the switch is `CORTEX_PROVIDER=real` and nothing else — the client,
 the PAT, and cross-region are all already in place.
