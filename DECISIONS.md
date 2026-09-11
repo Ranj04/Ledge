@@ -1765,3 +1765,15 @@ genuinely short (1,161 tokens, and 100 tokens) is still not credited and still b
 the slack scales with the boundary. `test_the_cached_prefix_grows_across_turns_on_the_openai_implicit_path`
 is untouched and still `xfail(strict=True)` — the prefix-freeze half stays open until a live
 transcript clears fix (b) in D48.
+
+### D50 — 2026-09-10 — the simulator's model label is a current id
+
+`CORTEX_MODEL` defaulted to `claude-sonnet-4-5`. On the default path (`CORTEX_PROVIDER=sim`) that
+string is what `/api/status` reports as `providers.model` and what the provider chip shows a
+visitor, and it is no longer a current model id. Changed the default to `claude-sonnet-5` in
+`app/config.py`, `.env.example` and `docker-compose.yml`. Nothing else moves: `Pricing.model` is a
+label and every rate is a literal, so no dollar figure depends on the string; `conftest.py` pins
+the test environment's `CORTEX_MODEL` explicitly and is untouched; the four committed
+`results/*.json` keep the label they were generated under (`results/README.md` now says why);
+`app/cortex/real_client.py`'s list of ids Cortex exposed on 2026-08-06 and the dated pricing
+comment in `app/config.py` are records of what was checked and stay as written.

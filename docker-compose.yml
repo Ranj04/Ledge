@@ -62,7 +62,7 @@ services:
       EVEROS_API_KEY: ${EVEROS_API_KEY:-}
       SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT:-}
       SNOWFLAKE_PAT: ${SNOWFLAKE_PAT:-}
-      CORTEX_MODEL: ${CORTEX_MODEL:-claude-sonnet-4-5}
+      CORTEX_MODEL: ${CORTEX_MODEL:-claude-sonnet-5}
       SQLITE_PATH: /data/ledger.db
     volumes:
       - app-data:/data
