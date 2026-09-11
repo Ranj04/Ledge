@@ -1,22 +1,79 @@
 # MemoryLedger
 
-> The product is **MemoryLedger**. The repository is named `Ledge`; the Python distribution is `memoryledger`.
+[![ci](https://github.com/Ranj04/Ledge/actions/workflows/ci.yml/badge.svg)](https://github.com/Ranj04/Ledge/actions/workflows/ci.yml)
 
-**An agent that remembers more, should not cost more.**
+**An agent that remembers more should not cost more.**
 
-Two pieces of infrastructure, demonstrated under a study tutor.
+An agent's prompt is rebuilt every turn — instructions, retrieved memories, the new message — and
+prompt caching only pays when the *front* of the prompt is byte-identical to the previous call.
+Retrieval changes the front every turn, so the more an agent remembers, the more every turn costs.
+MemoryLedger orders retrieved memories by how often they change, so the stable part of the prompt
+stays cacheable, and keeps a ledger of what each memory costs per month.
+
+- **Measured live.** The same memories, re-ordered, cut input-side cost by **42.9%** against real
+  OpenAI responses (`gpt-5.6-terra`, 2026-08-07, `cached_tokens` read off the wire). The baseline
+  had caching switched on too and scored 0.0%.
+- **Measured in dollars, not percentages.** The four prompt formats this repository went through
+  are compared on the same corpus in
+  [the simulator table](#what-the-provenance-delimiter-did-to-the-numbers-simulator-2026-09-10):
+  the one that raised the *reduction* by half a point raised the *bill* by 59%.
+- **Simulated where it has to be, and labelled.** Without an API key the model's replies come from
+  a simulator, and the cache accounting comes from a re-implementation of the provider's billing
+  rule — prefix hashing, breakpoints, TTL — not from a stub. Every file in [`results/`](results/)
+  says which kind it is.
+- **Adversarial.** A 29-case prompt-injection corpus that the memory format defeats
+  (`tests/test_injection.py`), and a separate suite of cross-review tests — this was built by two
+  models, each writing cases to break the other's work (`tests/review/`).
+- **Negative results kept.** `app/cortex/openai_client.py` records that explicit cache breakpoints
+  measured seven points *worse* than implicit caching on OpenAI, and the code follows the
+  measurement rather than the design.
+
+Clone to running takes about a minute — no credentials, and no network once the tokenizer table is
+cached. **281 tests** pass in CI on every push; the **76** adversarial tests pass locally.
+
+The repository is named `Ledge`; the Python distribution is `memoryledger`. The study tutor it
+runs under is the demo surface, not the product: it exists so there is a person to care about and
+so the system generates realistic memory pressure.
 
 ---
 
-## The problem
+## Run it
 
-An agent's prompt is reassembled every turn: instructions + retrieved memories + the new message.
-Prompt caching only fires when the *front* of the prompt is byte-identical to the previous call.
-Memory retrieval changes what goes into the prompt every turn, and memories are usually injected
-near the front — so the cache never hits. **The more an agent remembers, the more every turn
-costs.**
+Python 3.12 and Node 20. The virtual environment's interpreter is `.venv/bin/python` on macOS and
+Linux and `.venv/Scripts/python.exe` on Windows; every command in this document is written in the
+first form, and the second is a straight substitution.
 
-## What this does
+```bash
+python -m venv .venv                          # any Python 3.12; or: uv venv --python 3.12 .venv
+.venv/bin/pip install -r requirements.txt     # Windows: .venv\Scripts\pip install -r requirements.txt
+cd web && npm install && npm run build && cd ..
+
+# The token counter's BPE table: one network fetch, ever. Everything else is offline.
+.venv/bin/python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+
+# Fill the ledger. It ships empty — data/ledger.db is generated, not seeded — so without
+# this step the dashboard opens on zeros.
+.venv/bin/python scripts/experiment.py --runs 4 --record
+
+.venv/bin/python -m app
+```
+
+Open <http://localhost:8000>. No credentials needed — it runs against faithful simulators, and the
+UI says on screen whether the provider is a simulator.
+
+`TIKTOKEN_CACHE_DIR` can point at a directory that already holds the BPE blob, for a machine with
+no network at all. Snowflake and the embedding scorer are optional:
+`pip install -r requirements-snowflake.txt`.
+
+For the real memory layer, EverOS runs self-hosted alongside (free, no per-operation charge, and
+no network hop):
+
+```bash
+docker compose up -d everos    # published on host port 8077
+curl localhost:8077/health
+```
+
+## How it works
 
 **1. Cache-aware memory layout.** The Context Assembler sorts retrieved memories by *volatility* —
 stable first, volatile last — and marks cache breakpoints at the tier boundaries. Same memories,
@@ -32,42 +89,6 @@ monthly cost. An ablation harness then replays calls with one memory removed and
 answer changed. Memories that cost money and change nothing become eviction candidates.
 
 ---
-
-## Run it in 60 seconds
-
-```bash
-uv venv --python 3.12 .venv
-VIRTUAL_ENV=.venv uv pip install -r requirements.txt
-cd web && npm install && npm run build && cd ..
-.venv/bin/python -m app
-```
-Snowflake and the embedding scorer are optional: `pip install -r requirements-snowflake.txt`
-
-**Offline.** The token counter needs the `cl100k_base` BPE table, which tiktoken downloads once on
-first use — pre-fetch it on a machine with network access:
-
-```bash
-python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
-```
-
-`TIKTOKEN_CACHE_DIR` can point at a directory that already holds the blob; everything else in
-this repo runs with no network and no credentials.
-
-Open <http://localhost:8000>. No credentials needed — it runs against faithful simulators.
-
-For the real memory layer, EverOS runs self-hosted alongside (free, no per-operation charge, and
-no network hop):
-
-```bash
-docker compose up -d everos    # published on host port 8077
-curl localhost:8077/health
-```
-
-Give the dashboard something to show:
-
-```bash
-.venv/bin/python scripts/experiment.py --runs 4 --record
-```
 
 ## The headline number
 
@@ -160,10 +181,10 @@ Two kinds of measurement appear in this document, and each carries its own prove
   **Live.** Measured against real OpenAI responses (`gpt-5.6-terra`) on **2026-08-07**. The JSON
   artifact of that run was not retained (`BLOCKERS.md`, "No live `results/*.json` artifact exists"),
   and there is no `OPENAI_API_KEY` on the build machine to reproduce it.
-- **The Stage 1 / 2 / 3 comparison table** ("What the provenance delimiter did to the numbers").
-  **Simulator.** All three columns come from `CORTEX_PROVIDER=sim` runs on 2026-09-10, all
-  committed — `results/2026-09-10-simulator.json`, `…-stage2.json` and `…-stage3.json` — and
-  none is a live measurement.
+- **The Stage 1 / 2 / 3 / 4 comparison table** ("What the provenance delimiter did to the numbers").
+  **Simulator.** All four columns come from `CORTEX_PROVIDER=sim` runs on 2026-09-10, all
+  committed — `results/2026-09-10-simulator.json`, `…-stage2.json`, `…-stage3.json` and
+  `…-stage4.json` — and none is a live measurement.
 
 In both cases `cached_tokens` is **derived**, never assigned: on a live call it is read off
 `usage.prompt_tokens_details` in the API response; offline it comes from the simulator's prefix
@@ -198,7 +219,7 @@ not writes, so `app/cortex/openai_client.py` reports `cache_write_tokens` as zer
 guessing. Writes bill at 1.25× and land on tokens *not* served from cache — which is the naive
 baseline, at 0.0% cached. Counting them would widen the gap, so the 2026-08-07 live 42.9% is a floor
 (`BLOCKERS.md`). The simulator does derive write tokens (`app/cortex/cache_sim.py`) and prices them
-at the write rate, so the Stage 1 / 2 / 3 simulator table already includes them.
+at the write rate, so the Stage 1 / 2 / 3 / 4 simulator table already includes them.
 
 ## Is the baseline fair?
 
@@ -216,7 +237,7 @@ D6.
 - [`DECISIONS.md`](DECISIONS.md) — the recorded technical reasoning.
 - [`BLOCKERS.md`](BLOCKERS.md) — limitations, corrections, and unresolved work.
 - [`results/`](results/) — machine-readable measurement artifacts and provenance.
-- [`docs/history/`](docs/history/) — working documents retained from the overnight build.
+- [`docs/history/`](docs/history/) — dated records from the build and the event it was built for; not maintained.
 
 ## Layout
 
@@ -259,16 +280,19 @@ nothing caches unless a breakpoint says so, placement is load-bearing and the br
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q --ignore=tests/review   # 257 passed — the gate, measured 2026-09-10
-.venv/bin/python -m pytest -q tests/review            # 46 passed — the other model's adversarial tests
+.venv/bin/python -m pytest -q --ignore=tests/review   # 281 passed — the CI gate, measured 2026-09-10
+.venv/bin/python -m pytest -q tests/review            # 76 passed — the cross-model review tests, run locally
 ```
 
-## Going live
+## Running against real providers
 
-`docs/history/EVENT_DAY.md` is the ordered checklist: which environment variables to set, in what order, what to
-run to verify each provider, and what output to expect at each step. Start with
-`tests/probe_openai_live.py`, which checks the cache mechanic and then the layout effect over a
-real conversation, and exits non-zero if either fails.
+Three switches, one per dependency, so a failure is always attributable. Nothing on the real
+Snowflake path has been run since 2026-08-07, and every line that rests on an unverified
+assumption is marked `# VERIFY-WITH-CREDENTIALS:` where it sits — 23 in `.py` files, one in
+`sql/`; `BLOCKERS.md` says what each needs. `tests/probe_openai_live.py` checks the cache mechanic
+and then the layout effect over a real conversation, and exits non-zero if either fails.
+`docs/history/EVENT_DAY.md` is the checklist that was used to go live for the event, kept as a
+record.
 
 ```
 CORTEX_PROVIDER=openai|sim|real   inference   (real = Snowflake Cortex)
@@ -292,6 +316,4 @@ loaded as-is, and `tests/test_duckdb_store.py` holding it to SQLite's numbers on
 |---|---|
 | `DECISIONS.md` | Every ambiguous call and why |
 | `BLOCKERS.md` | What could not be verified without credentials |
-| `docs/history/EVENT_DAY.md` | Ordered go-live checklist |
-| `docs/history/DEMO.md` | The 3-minute script |
-| `docs/history/HANDOFF.md` | Interface changes and cross-agent requests |
+| `docs/history/` | Dated records, not maintained: the go-live checklist, the 3-minute demo script, the cross-agent handoff log |

@@ -15,7 +15,7 @@
 
 FROM python:3.12-slim
 
-# VERIFY-AT-EVENT: LanceDB pulls native wheels; if the install fails on the
+# VERIFY-WITH-CREDENTIALS: LanceDB pulls native wheels; if the install fails on the
 # venue machine, `apt-get install -y build-essential` here and rebuild.
 RUN pip install --no-cache-dir everos
 
@@ -26,7 +26,7 @@ WORKDIR /app
 # keeps EverOS on its own default port 8000; compose maps it to 8077 on the
 # host, because OUR service already owns host port 8000.
 #
-# VERIFY-AT-EVENT: confirm `everos server start` accepts --host/--port. If it
+# VERIFY-WITH-CREDENTIALS: confirm `everos server start` accepts --host/--port. If it
 # does not, drop the flags — the default already binds 8000 inside the
 # container, and only the host mapping matters.
 EXPOSE 8000

@@ -278,7 +278,7 @@ def test_duckdb_raw_connection_fails_on_the_second_version_and_records_nothing()
 # -- Snowflake, through a cursor that behaves like the connector's --------------
 
 # What DESC TABLE reports for each logical type — the spelling `physical_shape`
-# must see through. VERIFY-AT-EVENT: pinned from documentation, not a real run.
+# must see through. VERIFY-WITH-CREDENTIALS: pinned from documentation, not a real run.
 _DESC_TYPES = {
     "text": "VARCHAR(16777216)",
     "int": "NUMBER(38,0)",

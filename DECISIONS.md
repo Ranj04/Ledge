@@ -1543,3 +1543,105 @@ DuckDB equal at `limit` ∈ {-1, 0, 1, N, 10^12}, `days` ∈ {-1, 0, 1, 30, 10^6
 empty-string filters, with the expected row counts asserted, so the next backend is held to the
 same edges rather than to a happy path. Sol's `tests/review/test_t4_duckdb_adversarial.py`
 passes unmodified.
+
+### D46 — 2026-09-10 — T5: the event has passed, and the repository now speaks to a stranger
+
+**What changed, and what did not.** No measured number moved. `results/*.json`, every test
+assertion, `app/cortex/cache_sim.py`, `app/contracts.py`, the seed corpus and the negative result
+in `app/cortex/openai_client.py` are byte-identical to the T4 merge. What changed is who the
+documents address: the README opened for someone about to present, and now opens for someone who
+found the repository on GitHub and has ninety seconds.
+
+**The marker is renamed for its condition, not its date.** `# VERIFY-AT-EVENT:` becomes
+`# VERIFY-WITH-CREDENTIALS:` in every tracked live file. The text after the colon — the checklist
+of what an unexercised line needs — is untouched. Counted before and after: 23 `# VERIFY-AT-EVENT:`
+comments in `.py` files (12 in `ablation/similarity.py`, 11 under `app/`); 26 mentions of the
+string in `.py` once the two `-- ` SQL-comment forms in `similarity.py` and one bare mention in
+`tests/test_migrations.py` are included; 1 in `sql/02_rollups.sql`; and the same numbers after.
+The T5 brief expected 22 and Appendix A had said 18 — both were counts of earlier trees, and the
+tree, not the brief, is what is reported. The rename reached `ablation/` and `sql/`, which are
+Sol's directories, because the brief's verification requires zero old markers in `.py` and `.sql`
+and a name change inside a comment is exactly the mechanical edit the ownership rule exists to
+keep safe; Sol reviews this task.
+
+**What keeps the old name, on purpose.** `docs/history/`, the prompts, requests and reviews under
+`.sol/`, and every entry in this file before this one still say `VERIFY-AT-EVENT`. They are dated
+records of what was written; rewriting a prompt that was issued with that name would falsify what
+the agent was told, and this file is append-only. A reader who greps for the old name lands in
+history and in D33–D45, and `CLAUDE.md`'s conventions say why.
+
+**`BLOCKERS.md` now distinguishes closed from permanent.** Three entries closed with evidence
+measured on this tree: the CI workflow ran on GitHub and passed on its first run; the Docker
+pre-warm layer loads the tokenizer in 0.178 s under `--network none`; and the eviction dashboard's
+`$0.00/month` is a fresh-clone artefact that the record step fixes — after it, the costliest of
+119 non-zero rows is the planted junk memory `mem_ef6be89e` — $0.9176/mo on a fresh ledger holding
+exactly one `--runs 4` sweep, $1.3764/mo on the build machine's ledger, which held a sweep and a
+half; the projection scales with recorded calls and the ranking does not — which is the thesis on
+real ledger rows. Entries that once said "resolves at the event" now say what is true: they need
+credentials nobody has run them with, and DuckDB is the warehouse-grade backend that is exercised
+instead. The dated 2026-08-07 entries gained a status line and kept their text.
+
+**Two things in the quickstart were broken for a Windows reader and are not any more.** Every
+command said `.venv/bin/python`; the README now states the Windows substitution once and keeps
+the macOS/Linux form, which is correct there. And `scripts/experiment.py --runs 4 --record` — the
+documented step that fills the ledger — crashed with `UnicodeEncodeError`, because a redirected
+Windows console encodes cp1252 and the bar chart is drawn with `█`. `main()` now reconfigures
+`sys.stdout` to UTF-8; the measurement logic is untouched, and the `--json` output of this tree
+equals `results/2026-09-10-simulator-stage4.json` in every field but `generated_at`. The record
+step now comes *before* "open the dashboard", because `data/ledger.db` is gitignored — the ledger
+is generated, not seeded — so every fresh clone starts empty and the old order showed zeros first.
+
+**The CI badge.** Added only because the workflow has now executed and passed. A badge on a
+workflow that had never run would have been the kind of claim this repository exists not to make.
+It says nothing about coverage, because there is no coverage gate.
+
+### D47 — 2026-09-10 — T5 round 2: the offline claim is now true, not narrowed
+
+**What was wrong.** The T5 README opens with "no credentials, and no network once the tokenizer
+table is cached" and the quickstart says "Everything else is offline." Sol's review test
+(`tests/review/test_t5_portfolio_claims.py`) showed the built SPA requesting three font families
+from `fonts.googleapis.com` and `fonts.gstatic.com` at page load. Sol had seen those fonts in T0's
+review and correctly judged them below the bar for a finding — nothing claimed offline operation
+then. The fact did not change; what the repository asserted about it did. That is the shape of
+error this project exists to avoid, and it was mine.
+
+**The choice: make the claim true rather than narrow it.** "Clone it and it runs with no
+credentials and no network" is the strongest sentence in the README and is worth more than a
+typeface. The remote `<link>`s are gone from `web/index.html` and the four font declarations in
+`web/src/styles.css` are system stacks (`ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+Roboto, "Helvetica Neue", Arial, sans-serif`; `ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+Consolas, "Liberation Mono", monospace`). Self-hosting the three families was the alternative;
+it would add roughly 200–400 KB of woff2 to a 249 KB bundle for a demo dashboard, and the
+Google faces were already declared *with these same system fallbacks behind them*, so any viewer
+without them installed was already seeing the system rendering. The display face (Outfit, weight
+300 on `h1`/`h2`/`.hero-cost`) is the one visible loss; the layout reads the same.
+
+**Bundle:** `web/dist` 252K → 249K. CSS 24,691 → 24,797 bytes (longer stacks), JS byte-identical
+at 223,767, `index.html` lost six lines. `grep -rc "fonts.googleapis\|fonts.gstatic"` is 0 in
+`web/index.html`, `web/dist/index.html` and all of `web/src/`. The remaining `http` strings in
+the built output are XML namespace identifiers (`w3.org/2000/svg` and kin) and React's
+error-decoder URL inside an error-message string — neither is fetched.
+
+**Every other absolute claim in the README, checked by asking what happens with the cable out:**
+- *"no network once the tokenizer table is cached"* — `app/cortex/tokens.py` catches the
+  `tiktoken` fetch failure and prints the offline fix (`TIKTOKEN_CACHE_DIR`). Holds.
+- *"Everything else is offline"* — the default providers are `CORTEX_PROVIDER=sim`,
+  `EVEROS_PROVIDER=sim`, `LEDGER_PROVIDER=sqlite` (`app/config.py`); `service.startup()` only
+  runs `ledger.init_schema()`; the only network clients (`openai_client.py`, `everos/real_client.py`,
+  `snowflake_store.py`) are constructed only when their provider is selected. Holds now that
+  the fonts are gone.
+- *`experiment.py --runs 4 --record`* in the quickstart — the default `ABLATION_SCORER` is the
+  lexical scorer; the embedding scorer is opt-in (`ablation/similarity.py`). Holds.
+- *"No credentials needed — … the UI says on screen whether the provider is a simulator"* —
+  `web/src/App.tsx:132` renders a `SIMULATED PROVIDERS` chip from the `providers` block in
+  `app/api/routes.py:57`. Holds.
+- *"EverOS runs self-hosted alongside (free, no per-operation charge, and no network hop)"* —
+  the request path is `localhost:8077`; building or pulling the image needs the network once,
+  as `npm install` and `pip install` do. Opt-in and clearly in a separate "for the real memory
+  layer" paragraph. Holds as written.
+- *"281 tests pass in CI … the 75 adversarial tests pass locally"* — 281 held; 75 was stale the
+  moment Sol committed his test. Now **76**, in both places the README states it.
+
+**Ownership note.** `web/` is Sol's directory. The round-2 instruction named the fix, the files
+and the grep target, and the change is six lines in two files; spawning a Sol task for it would
+have added a round-trip to a two-minute edit. Recorded here so the crossing is visible.

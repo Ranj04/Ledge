@@ -231,6 +231,14 @@ def bar(value: float, peak: float, width: int = 28) -> str:
 
 
 async def main() -> int:
+    # A Windows console whose output is redirected falls back to the legacy
+    # code page (cp1252), which cannot encode the block characters the bar
+    # chart below is drawn with: the sweep completed and then crashed printing
+    # its result. Fix the stream here rather than ask the reader to set
+    # PYTHONIOENCODING. `--json` output is ASCII either way.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument(

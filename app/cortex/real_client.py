@@ -1,7 +1,7 @@
 """Snowflake Cortex client.
 
 Written tonight, unexercised until the event. Every line that could not be
-checked against a live account is marked `# VERIFY-AT-EVENT:`.
+checked against a live account is marked `# VERIFY-WITH-CREDENTIALS:`.
 
 What the documentation confirms (checked 2026-08-06):
 
@@ -136,7 +136,7 @@ def _read_usage(usage: Any, model: str) -> Usage:
     `cached_tokens` comes from the response and nowhere else. If the field is
     missing it is zero, which understates our result rather than inventing one.
 
-    # VERIFY-AT-EVENT: confirm Cortex returns `cache_read_input_tokens` and
+    # VERIFY-WITH-CREDENTIALS: confirm Cortex returns `cache_read_input_tokens` and
     # `cache_creation_input_tokens` under these exact names. Run
     # `scripts/verify_cortex.py`, which prints the raw usage block; if the
     # names differ, add them to the tuples below.

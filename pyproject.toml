@@ -43,7 +43,7 @@ ignore = [
 # 459 of the repo's 464 over-length lines are seeded prose and data literals in
 # the student generator; wrapping them would rewrite the seed corpus.
 "seed/generate.py" = ["E501"]
-# Every over-length line here is a `# VERIFY-AT-EVENT:` marker, which Appendix A
+# Every over-length line here is a `# VERIFY-WITH-CREDENTIALS:` marker, which Appendix A
 # of MemoryLedger-EXECUTE.md says not to reflow.
 "ablation/similarity.py" = ["E501"]
 # One diagnostic f-string.
