@@ -1,9 +1,10 @@
-"""The schema is declared once; the first three tests keep both renderings honest.
+"""The schema is declared once; the first three tests keep every rendering honest.
 
 The rest pin what `apply` does when a table already exists (D38): a matching one is
 recorded, one that only lacks columns is widened, anything else raises and records
-nothing — on Snowflake too, exercised through a cursor that answers SHOW TABLES,
-DESC TABLE and ALTER TABLE the way the connector does.
+nothing — on DuckDB, against a real in-memory database, and on Snowflake, exercised
+through a cursor that answers SHOW TABLES, DESC TABLE and ALTER TABLE the way the
+connector does.
 
 Two migrations are on disk, and 0002 re-declares `ablation_results` with one more
 column, so a pre-versioned ledger is 0001's tables (`INITIAL`) and a current ledger
@@ -14,9 +15,13 @@ from __future__ import annotations
 
 import sqlite3
 
+import duckdb
 import pytest
 
 from app.telemetry import migrate
+from app.telemetry.duckdb_store import MigratableConnection
+
+DIALECTS = ("sqlite", "duckdb", "snowflake")
 
 MIGRATIONS = migrate.load_migrations()
 VERSIONS = [m.VERSION for m in MIGRATIONS]
@@ -39,14 +44,13 @@ def _column_names(ddl: str) -> list[str]:
     ]
 
 
-def test_both_dialects_declare_the_same_columns_in_the_same_order():
+def test_every_dialect_declares_the_same_columns_in_the_same_order():
     """What makes the parity claim in sqlite_store's docstring true, not aspirational."""
     for table in DECLARATIONS:
-        sqlite_cols = _column_names(migrate.render(table, "sqlite"))
-        snowflake_cols = _column_names(migrate.render(table, "snowflake"))
-        assert sqlite_cols == snowflake_cols, table.name
-        # And the parser saw every declared column, so `[] == []` cannot pass.
-        assert sqlite_cols == [c[0] for c in table.columns], table.name
+        declared = [c[0] for c in table.columns]
+        for dialect in DIALECTS:
+            # And the parser saw every declared column, so `[] == []` cannot pass.
+            assert _column_names(migrate.render(table, dialect)) == declared, (table.name, dialect)
 
 
 def test_migrations_are_idempotent():
@@ -67,6 +71,9 @@ def test_every_column_uses_one_of_the_five_logical_types():
         for name, logical, nullable, primary_key in table.columns:
             assert logical in migrate.LOGICAL_TYPES, f"{table.name}.{name}: {logical}"
             assert isinstance(nullable, bool) and isinstance(primary_key, bool), name
+    for dialect in DIALECTS:
+        assert set(migrate._TYPES[dialect]) == migrate.LOGICAL_TYPES, dialect
+        assert set(migrate._REPORTED_TYPES[dialect]) == migrate.LOGICAL_TYPES, dialect
 
 
 # -- an existing table is never taken on trust (D38) ---------------------------
@@ -182,6 +189,90 @@ def test_adopt_baseline_records_without_applying_and_reports_every_difference():
     assert [r[1] for r in conn.execute("PRAGMA table_info(call_log)")] == ["call_id"]
     with pytest.raises(migrate.MigrationError, match="already recorded"):
         migrate.adopt(conn, "sqlite", VERSIONS[0])
+
+
+# -- DuckDB, for real: the same D38 guarantees on the third dialect --------------
+
+
+def _duckdb() -> MigratableConnection:
+    return MigratableConnection(duckdb.connect(":memory:"))
+
+
+def _duckdb_tables(conn) -> set[str]:
+    return {r[0] for r in conn.execute("SELECT table_name FROM duckdb_tables()").fetchall()}
+
+
+def _assert_all_as_declared_on_duckdb(conn) -> None:
+    for table in TABLES:
+        physical = migrate.physical_shape(conn, table, "duckdb")
+        assert physical == migrate.declared_shape(table, "duckdb"), table.name
+
+
+def test_duckdb_migrations_are_idempotent_and_every_table_is_read_back_as_declared():
+    conn = _duckdb()
+    assert migrate.apply(conn, "duckdb") == VERSIONS
+    assert migrate.apply(conn, "duckdb") == []
+    _assert_all_as_declared_on_duckdb(conn)
+    rows = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+    assert rows == [(v,) for v in VERSIONS]
+    assert migrate.physical_shape(conn, TABLES[0], "duckdb")[0] == (
+        "call_id", "VARCHAR", False, True
+    )
+
+
+def test_duckdb_drifted_table_raises_and_the_whole_version_rolls_back():
+    """DuckDB's DDL is transactional, so the tables after the bad one never land."""
+    conn = _duckdb()
+    conn.execute("CREATE TABLE call_log (call_id VARCHAR)")
+    with pytest.raises(migrate.SchemaMismatch) as info:
+        migrate.apply(conn, "duckdb")
+    msg = str(info.value)
+    assert msg.startswith(f"call_log on duckdb is not what {VERSIONS[0]} declares:")
+    assert "  call_id: declared VARCHAR NOT NULL PRIMARY KEY, found VARCHAR\n" in msg
+    assert "  ts: declared TIMESTAMP NOT NULL, not present\n" in msg
+    assert f"--dialect duckdb --adopt-baseline {VERSIONS[0]}" in msg
+    assert conn.execute("SELECT * FROM schema_migrations").fetchall() == []
+    assert _duckdb_tables(conn) == {"call_log", "schema_migrations"}
+
+
+def test_duckdb_missing_columns_are_added_and_rows_survive():
+    conn = _duckdb()
+    conn.execute(
+        "CREATE TABLE ablation_results (ablation_id VARCHAR NOT NULL, memory_id VARCHAR NOT NULL, "
+        "user_id VARCHAR NOT NULL, ts TIMESTAMP NOT NULL, PRIMARY KEY (ablation_id))"
+    )
+    conn.execute("INSERT INTO ablation_results VALUES ('a1', 'm1', 'u1', '2026-09-10T00:00:00Z')")
+    assert migrate.apply(conn, "duckdb") == VERSIONS
+    _assert_all_as_declared_on_duckdb(conn)
+    rows = conn.execute("SELECT ablation_id, verdict, probes_tested FROM ablation_results")
+    assert rows.fetchall() == [("a1", None, None)]
+
+
+def test_duckdb_widening_a_populated_table_with_a_new_not_null_column_rolls_back():
+    conn = _duckdb()
+    conn.execute(
+        "CREATE TABLE memory_registry "
+        "(memory_id VARCHAR NOT NULL, user_id VARCHAR NOT NULL, PRIMARY KEY (memory_id))"
+    )
+    conn.execute("INSERT INTO memory_registry VALUES ('m1', 'u1')")
+    with pytest.raises(duckdb.ConstraintException, match="NOT NULL"):
+        migrate.apply(conn, "duckdb")
+    assert _duckdb_tables(conn) == {"memory_registry", "schema_migrations"}
+    assert conn.execute("SELECT * FROM memory_registry").fetchall() == [("m1", "u1")]
+    assert conn.execute("SELECT * FROM schema_migrations").fetchall() == []
+
+
+def test_duckdb_raw_connection_fails_on_the_second_version_and_records_nothing():
+    """Why `MigratableConnection` exists. DuckDB's `cursor()` is a second connection
+    with its own transaction: `apply` BEGINs on it and commits on the first, so
+    0001's transaction is still open when 0002 BEGINs, and DuckDB refuses. Loud,
+    not silent — but every table 0001 created is discarded with the cursor, and
+    nothing is on record. Measured; the prediction was a silent success."""
+    raw = duckdb.connect(":memory:")
+    with pytest.raises(duckdb.TransactionException, match="within a transaction"):
+        migrate.apply(raw, "duckdb")
+    assert raw.execute("SELECT version FROM schema_migrations").fetchall() == []
+    assert _duckdb_tables(raw) == {"schema_migrations"}
 
 
 # -- Snowflake, through a cursor that behaves like the connector's --------------

@@ -12,6 +12,8 @@ web/node_modules/
 data/*.db
 data/*.db-*
 data/*.sqlite
+data/*.duckdb
+data/*.duckdb.wal
 .sol/logs/
 .DS_Store
 *.egg-info/

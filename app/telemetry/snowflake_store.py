@@ -29,6 +29,16 @@ from app.config import get_settings
 from app.contracts import CallRecord, InjectionRecord
 from app.telemetry import migrate
 
+# Identical projection and identical parameter contract to SqliteLedgerStore
+# and V_MEMORY_MONTHLY_COST, so flipping LEDGER_PROVIDER never changes the
+# dashboard's numbers or what an out-of-range `limit` or `days` means.
+from app.telemetry.sqlite_store import (
+    _cost_per_1k_calls,
+    _project_monthly,
+    _row_limit,
+    _window_start,
+)
+
 
 class SnowflakeLedgerStore:
     dialect = "snowflake"
@@ -247,6 +257,11 @@ class SnowflakeLedgerStore:
     async def memory_costs(
         self, *, user_id: str | None = None, days: int = 30
     ) -> list[dict[str, Any]]:
+        # The window starts where the other two stores' does — one Python
+        # computation bound as the ISO-Z text this store's inserts already bind
+        # — rather than a DATEADD the warehouse would evaluate on its own (D45).
+        # VERIFY-AT-EVENT: `TO_TIMESTAMP_NTZ(%s)` in a WHERE against a TIMESTAMP_NTZ
+        # column, bound with the same ISO-Z string the inserts use; never run.
         sql = """
             SELECT i.MEMORY_ID, i.USER_ID, i.MEMORY_TYPE, MAX(i.TIER) AS TIER,
                    COUNT(*) AS INJECTIONS, SUM(i.TOKENS) AS TOTAL_TOKENS,
@@ -255,16 +270,14 @@ class SnowflakeLedgerStore:
                    AVG(IFF(i.WAS_CACHED, 1.0, 0.0)) AS CACHE_HIT_RATE,
                    MIN(i.TS) AS FIRST_SEEN, MAX(i.TS) AS LAST_SEEN
             FROM MEMORY_INJECTIONS i
-            WHERE i.TS >= DATEADD(day, -%s, CURRENT_TIMESTAMP())
+            WHERE i.TS >= TO_TIMESTAMP_NTZ(%s)
               AND (%s IS NULL OR i.USER_ID = %s)
             GROUP BY i.MEMORY_ID, i.USER_ID, i.MEMORY_TYPE
             ORDER BY COST_USD DESC
         """
-        rows = await self._run(self._query, sql, (days, user_id, user_id))
-        # Identical projection to SqliteLedgerStore and to V_MEMORY_MONTHLY_COST,
-        # so flipping LEDGER_PROVIDER never changes the dashboard's numbers.
-        from app.telemetry.sqlite_store import _cost_per_1k_calls, _project_monthly
-
+        rows = await self._run(
+            self._query, sql, (_window_start(days), user_id, user_id)
+        )
         for row in rows:
             row["cost_per_1k_calls_usd"] = _cost_per_1k_calls(
                 row.get("cost_usd", 0.0), row.get("injections", 0)
@@ -307,7 +320,9 @@ class SnowflakeLedgerStore:
 
     async def recent_calls(self, *, limit: int = 50) -> list[dict[str, Any]]:
         return await self._run(
-            self._query, "SELECT * FROM CALL_LOG ORDER BY TS DESC LIMIT %s", (limit,)
+            self._query,
+            "SELECT * FROM CALL_LOG ORDER BY TS DESC LIMIT %s",
+            (_row_limit(limit),),
         )
 
     async def cache_hit_by_tier(self) -> list[dict[str, Any]]:

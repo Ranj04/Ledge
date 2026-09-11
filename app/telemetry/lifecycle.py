@@ -120,9 +120,11 @@ class LifecycleBackend(Protocol):
 
 
 def _sql(dialect: Dialect, text: str) -> str:
-    if dialect == "sqlite":
-        return text.replace("{ts}", "?")
-    return text.replace("{ts}", "TO_TIMESTAMP_NTZ(?)").replace("?", "%s")
+    if dialect == "snowflake":
+        return text.replace("{ts}", "TO_TIMESTAMP_NTZ(?)").replace("?", "%s")
+    # SQLite keeps the ISO text it is given; DuckDB parses the same text into a
+    # TIMESTAMP on the way in and compares it as one. Neither needs a cast.
+    return text.replace("{ts}", "?")
 
 
 # Inner join to the registry: a memory the ledger has never seen injected has
@@ -187,6 +189,12 @@ _CLAIM_EPISODE = {
           VALUES (s.user_id, s.content_sha256, s.ts)
     """,
 }
+
+# DuckDB speaks SQLite's upsert — `ON CONFLICT ... DO UPDATE ... WHERE`, `excluded`,
+# `?` — so the text is shared. Measured, not assumed: `tests/test_duckdb_store.py`
+# runs the claim on DuckDB and reads 1, 0, 1 and one True out of fifty.
+_RETIRE["duckdb"] = _RETIRE["sqlite"]
+_CLAIM_EPISODE["duckdb"] = _CLAIM_EPISODE["sqlite"]
 
 
 # ---------------------------------------------------------------------------

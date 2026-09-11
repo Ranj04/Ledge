@@ -294,7 +294,13 @@ class LedgerStore(Protocol):
     async def memory_costs(
         self, *, user_id: str | None = None, days: int = 30
     ) -> list[dict[str, Any]]:
-        """Per-memory rollup: injections, tokens, cost, cache hit rate."""
+        """Per-memory rollup: injections, tokens, cost, cache hit rate.
+
+        `days` is the window reaching back from now. Below zero it admits no
+        rows; longer than the calendar it admits every row. The window's start
+        is computed once in Python (`sqlite_store._window_start`) and bound as
+        the ISO-Z text every store writes, so no dialect computes its own.
+        """
         ...
 
     async def call_summary(
@@ -303,6 +309,14 @@ class LedgerStore(Protocol):
         ...
 
     async def recent_calls(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Newest first, at most `limit` rows.
+
+        Below zero admits no rows, and there is no spelling for "unlimited".
+        SQLite reads `LIMIT -1` as unlimited, DuckDB and Snowflake refuse it;
+        the route passes the query parameter through unconstrained, so the
+        store clamps (`sqlite_store._row_limit`) before any dialect sees it.
+        D45.
+        """
         ...
 
     async def init_schema(self) -> None:

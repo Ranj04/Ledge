@@ -4,6 +4,7 @@
     python scripts/migrate.py --dialect snowflake --dry-run > sql/01_ddl.sql
     python scripts/migrate.py --dialect sqlite --dry-run
     python scripts/migrate.py --dialect sqlite              # applies to SQLITE_PATH
+    python scripts/migrate.py --dialect duckdb              # applies to DUCKDB_PATH
     python scripts/migrate.py --dialect snowflake           # needs SNOWFLAKE_* in .env
     python scripts/migrate.py --dialect snowflake --adopt-baseline 0001_initial
 
@@ -64,6 +65,12 @@ def _connection(dialect: str):
 
     if dialect == "sqlite":
         return sqlite3.connect(get_settings().sqlite_path)
+    if dialect == "duckdb":
+        import duckdb
+
+        from app.telemetry.duckdb_store import MigratableConnection
+
+        return MigratableConnection(duckdb.connect(get_settings().duckdb_path))
     from app.telemetry.snowflake_store import SnowflakeLedgerStore
 
     # Database and schema are selected at connect time; both exist if there are
@@ -75,7 +82,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--dialect", choices=("sqlite", "snowflake"), required=True)
+    parser.add_argument("--dialect", choices=("sqlite", "duckdb", "snowflake"), required=True)
     parser.add_argument("--dry-run", action="store_true", help="print the DDL; never connect")
     parser.add_argument(
         "--adopt-baseline",
@@ -105,6 +112,10 @@ def main() -> None:
         from app.telemetry.sqlite_store import SqliteLedgerStore
 
         store = SqliteLedgerStore(get_settings().sqlite_path)
+    elif args.dialect == "duckdb":
+        from app.telemetry.duckdb_store import DuckDBLedgerStore
+
+        store = DuckDBLedgerStore(get_settings().duckdb_path)
     else:
         from app.telemetry.snowflake_store import SnowflakeLedgerStore
 

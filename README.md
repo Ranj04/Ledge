@@ -273,12 +273,18 @@ real conversation, and exits non-zero if either fails.
 ```
 CORTEX_PROVIDER=openai|sim|real   inference   (real = Snowflake Cortex)
 EVEROS_PROVIDER=sim|real          memory
-LEDGER_PROVIDER=snowflake|sqlite  ledger
+LEDGER_PROVIDER=sqlite|duckdb|snowflake  ledger
 ```
 
 Inference is OpenAI because the Snowflake trial account carries no Cortex entitlement on any
 surface. Snowflake holds the ledger and the economics rollups. The Cortex client is written and
 works — `CORTEX_PROVIDER=real` is the entire change if the entitlement appears (`DECISIONS.md` D28).
+
+The ledger has three backends from one schema declaration. `sqlite` is the default. `duckdb`
+is the warehouse-grade one that runs with no account: the same tables, `sql/02_rollups.sql`
+loaded as-is, and `tests/test_duckdb_store.py` holding it to SQLite's numbers on the same rows
+— the first backend on which "the stores agree" is a test rather than a docstring
+(`DECISIONS.md` D44). `snowflake` is written and has not run against a real account.
 
 ## Documents
 

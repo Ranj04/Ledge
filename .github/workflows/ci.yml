@@ -16,8 +16,8 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -32,6 +32,15 @@ jobs:
         run: python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
       - name: Test
         run: python -m pytest -q --ignore=tests/review
+      - name: DuckDB ledger, end to end
+        # The warehouse-grade backend that needs no account. Migrate a fresh file
+        # through the CLI — the path the service takes at startup — then run it
+        # again and read the version back: the second run must apply nothing.
+        env:
+          DUCKDB_PATH: /tmp/ci-ledger.duckdb
+        run: |
+          python scripts/migrate.py --dialect duckdb
+          python scripts/migrate.py --dialect duckdb | grep "schema_migrations at 0002_lifecycle"
 
   web:
     runs-on: ubuntu-latest
@@ -39,8 +48,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
           cache: npm

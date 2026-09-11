@@ -1392,3 +1392,154 @@ measurement. `test_api.py`'s inspect accounting expects the question row.
 Two `test_assembler.py` tests that indexed the final message as a string read its parts.
 
 **Not measured live.** No `OPENAI_API_KEY`; the `BLOCKERS.md` item stays open for Stage 4.
+
+### D44 — 2026-09-10 — T4: DuckDB is the ledger backend that can be run, and the first run found the views disagreeing with the dashboard by up to 2x
+
+**Why a third dialect.** The event has passed. Snowflake was the sponsor's warehouse and the
+ledger was written for it, but the trial account carried no Cortex entitlement (D28) and the
+current ledger path — the T2 migrator, the D38 read-back verification, the lifecycle `MERGE`s
+and the rollup views — has never executed against a real account; the 2026-08-07 session ran
+the earlier hand-written DDL and inserts only. A backend nobody can run is a claim, not a
+feature. DuckDB is embedded like SQLite, needs no account, and speaks the SQL the rollups were
+written in (`QUALIFY`, `COUNT_IF`, window functions), so it is the backend on which "the stores
+agree" can be a test. `LEDGER_PROVIDER=duckdb`, `DUCKDB_PATH`, `duckdb==1.5.5` pinned in
+`requirements.txt`; `pip install --dry-run` still resolves. `snowflake_store.py` and the Cortex
+client stay, unexercised and marked.
+
+**Was it renderer work?** The type map and the identifier rule were: five entries in `_TYPES`
+(`VARCHAR`, `BIGINT`, `DOUBLE`, `TIMESTAMP`, `BOOLEAN`), the same five in `_REPORTED_TYPES`,
+and `--dry-run` renders 8 `CREATE TABLE`s with the columns of the other two dialects
+(`test_every_dialect_declares_the_same_columns_in_the_same_order`). The rest of T2 leaked in
+five places, each of them a capability keyed on a dialect *name*:
+
+1. **`dialect == "sqlite"` meant "the embedded one" in five branches** — BEGIN a transaction,
+   introspect with `PRAGMA table_info`, widen by rebuild, render indexes, and `_widen` had
+   `"sqlite"` hard-coded into its own `render` call. DuckDB shares all of those except indexes.
+   They now read `dialect in EMBEDDED`, a named constant, and the comment says what the split
+   is about. Indexes remain SQLite-only: DuckDB's ART indexes serve point lookups and every
+   rollup is a scan.
+2. **`apply` assumes a DB-API cursor shares its connection's transaction.** DuckDB's
+   `cursor()` is a second connection with a transaction of its own. Predicted: `apply` would
+   BEGIN on the cursor, commit on the connection, and report every version applied while
+   persisting nothing — the silent false success D38 exists to prevent, on the third dialect.
+   Measured: worse in one way and better in another. 0001's transaction is still open on the
+   cursor when 0002 BEGINs, so DuckDB refuses with `cannot start a transaction within a
+   transaction` — loud, not silent — and everything 0001 created is discarded with the cursor.
+   `duckdb_store.MigratableConnection` hands `apply` one connection in both roles;
+   `test_duckdb_raw_connection_fails_on_the_second_version_and_records_nothing` pins the
+   measured behaviour, not the predicted one.
+3. **`PRAGMA table_info` raises on an absent table** where SQLite returns no rows, so
+   `physical_shape` checks `duckdb_tables()` first.
+4. **The lifecycle's statements are dicts keyed by dialect** (`_RETIRE`, `_CLAIM_EPISODE`,
+   `_sql`), so a third store was a `KeyError` until it had a third key. DuckDB speaks SQLite's
+   upsert (`ON CONFLICT ... DO UPDATE ... WHERE`, `excluded`, `?`) and parses an ISO `Z`
+   string into a `TIMESTAMP` on the way in, so the text is shared; the claim reads 1, 0, 1 and
+   one True out of fifty concurrent calls on DuckDB, as on SQLite.
+5. **The store's own SQL.** SQLite lets `GROUP BY memory_id` carry bare columns along; DuckDB
+   refuses, so `memory_costs` names them. And DuckDB returns a `TIMESTAMP` as a `datetime`,
+   which `_project_monthly` would have caught as an `AttributeError` and silently answered
+   with the unprojected cost — so every row read back carries its timestamps as the ISO `Z`
+   text the other stores return, and the dashboard sees one shape.
+
+So: mostly renderer work for the *schema*; not for the *behaviour*. T2 abstracted the type
+names and left the capabilities keyed on `"sqlite"`. Also touched outside T4's list:
+`scripts/migrate.py` (the `--dialect` choice the Verify step runs), `app/telemetry/lifecycle.py`
+(item 4), one docstring reference in `sqlite_store.py`, `.env.example`, `.gitignore`.
+
+**The rollups: one file, no split.** `IFF(a,b,c)` → `CASE WHEN a THEN b ELSE c END` (portable,
+chosen over DuckDB's `IF`); `DATEADD('day', -30, CURRENT_TIMESTAMP())` →
+`CURRENT_TIMESTAMP - INTERVAL '30 days'` (DuckDB has no `DATEADD` and rejects the parentheses);
+`::FLOAT` → `::DOUBLE` (DuckDB's `FLOAT` is four bytes; Snowflake's `DOUBLE` is `FLOAT`);
+`USE SCHEMA` removed — `01_ddl.sql` selects the schema in the same session, and DuckDB would
+not parse it. `QUALIFY` is unchanged. Nothing forced a `03_rollups_duckdb.sql`. The Snowflake
+rendering of the three substitutions is checked against documentation only and says so.
+
+**Parity, measured.** `tests/test_duckdb_store.py` writes one set of records — a six-turn
+conversation in both modes through the seeded corpus, the simulator and `build_records`: 12
+calls, 1,248 injections, 112 registry rows, 4 ablation rows — to SQLite and to DuckDB, and
+compares every dashboard query: `memory_costs` (four filters), `call_summary` (three),
+`cache_hit_by_tier`, `recent_calls`, `ablation_results`. **All agree.** Of 112 memories × 4
+floats in `memory_costs`, 202 are bit-identical and 246 differ only in the last bits of a sum
+(within 1e-9 relative); integers and strings are exactly equal; `call_summary` gives
+$0.050596 / $0.028483 (naive / tiered) on both. The timestamp round-trips as the same text.
+
+**The finding: the views projected a different monthly cost from the dashboard.**
+`V_MEMORY_MONTHLY_COST` computed `OBSERVED_DAYS` as `DATEDIFF('day', MIN, MAX) + 1` — day
+boundaries crossed, plus one. `_project_monthly`, the number the dashboard shows and the tests
+pin, uses the span in fractional days floored at one, and its docstring says the two are
+*"deliberately identical"*. Read back on DuckDB against the same rows, **105 of 112 memories
+disagreed, by up to 2.0x**: a memory seen from 04:30 to 01:30 the next day is 0.875 days
+(floored to 1) to the store and 2 days to the view, so the view said $0.00696/month and the
+dashboard $0.01392. Nobody could run the view before, so nobody saw it. Reconciled to the
+store's definition — `GREATEST(1, DATEDIFF('microsecond', MIN, MAX) / 86400000000.0)`, valid
+on both dialects — because the store's figure is the one on screen, the one `test_api.py` and
+`test_lifecycle.py` exercise, and the one the docstring names as the intent; the test now
+asserts view and store agree on every memory to 1e-9. `V_EVICTION_CANDIDATES` was exercised
+with two ablation rows per target, older verdict first: `evict`→`keep` is absent and
+`keep`→`evict` present, so `QUALIFY` picks the latest row and not any row.
+
+**CI** installs DuckDB through `requirements-dev.txt`, runs the new tests, and adds one step
+that migrates a fresh file through `scripts/migrate.py --dialect duckdb` twice — the second
+run must apply nothing. `actions/checkout@v5`, `setup-python@v6`, `setup-node@v5` (the Node 20
+deprecation warning).
+
+**Why fractional days is the right definition, not merely the store's** (added T4 round 2;
+Sol reached the same judgement independently in `.review/t4/1`). This changed a published cost
+number, so it should not rest on "the dashboard already did it that way". A monthly projection
+scales an observed cost by `30 / observed_days`, and `observed_days` is supposed to measure
+*how long the memory has been costing money*. `DATEDIFF('day', MIN, MAX) + 1` counts calendar
+dates crossed, so a memory seen at 23:59 and again at 00:01 has "2 observed days" and one seen
+at 00:01 and 23:59 has "1": the figure jumps at midnight without any increase in observed
+duration, and two memories with the same two-minute span project to costs 2x apart depending on
+the clock. Fractional elapsed time (`DATEDIFF('microsecond') / 86400000000.0`) is monotone in
+the duration actually observed and has no such discontinuity. The one-day floor is what makes
+the single-row and sub-day cases finite: a memory seen once has a zero span, and "cost × 30 /
+0" is not a projection. And because every ledger timestamp is UTC (`_iso`, `TO_TIMESTAMP_NTZ`
+on an NTZ column), there is no DST transition on which a 25- or 23-hour calendar day could
+make the two definitions differ for a reason that is not the midnight artefact.
+
+### D45 — 2026-09-10 — T4 round 2: a caller-supplied number means one thing on every ledger backend
+
+**The finding (Sol, `.review/t4/1` F1, MAJOR, with a failing test).** `GET
+/api/ledger/calls?limit=-1` was a 200 on SQLite and a 500 on DuckDB. The route declares
+`limit: int` unconstrained, SQLite reads `LIMIT -1` as "unlimited", DuckDB raises
+`BinderException: LIMIT/OFFSET cannot be negative`, and Snowflake rejects a negative LIMIT too.
+`test_the_two_embedded_ledgers_agree_on_every_dashboard_query` asserted parity and passed,
+because it only ever asked for `limit=5`. A parity that holds for well-formed input is not the
+parity the dashboard depends on.
+
+**The contract, decided once.** Normalise, not 4xx — Sol's test asserts both stores *return*
+`[]` for `-1`, and the contract belongs at the store, because the store is the thing three
+backends implement; the route stays an unconstrained `int` so there is one rule, not a route
+rule and a store rule that can drift. Written into `contracts.LedgerStore`, enforced by two
+helpers in `sqlite_store.py` next to `_project_monthly` (already the shared-math home the other
+two stores import from):
+
+- **`limit`** is "at most N rows". Below zero admits none. There is no spelling for
+  "unlimited": a dashboard page never wants the whole ledger, and SQLite's `-1` was a private
+  dialect, not a feature anyone used. `_row_limit` clamps before any SQL is built, so every
+  dialect sees a non-negative integer. Not special-cased to DuckDB; SQLite and Snowflake clamp
+  identically.
+- **`days`** is "the window reaching back N days from now". Below zero the window starts in the
+  future and admits nothing; longer than the calendar it starts at year 1 and admits everything.
+  This was the *second* method with the same class of divergence, found by asking the question
+  Sol's finding poses: the two embedded stores computed the window in Python and raised
+  `OverflowError` (a 500) past ~739,600 days or past `timedelta`'s 999,999,999-day ceiling,
+  while Snowflake evaluated `DATEADD(day, -%s, CURRENT_TIMESTAMP())` on the warehouse and had an
+  opinion of its own about the same value. `_window_start` computes the instant once and every
+  store binds it as the ISO-Z text it already writes; Snowflake's query now reads
+  `i.TS >= TO_TIMESTAMP_NTZ(%s)`, the binding shape its inserts and the lifecycle `MERGE`s use
+  (`# VERIFY-AT-EVENT:`, BLOCKERS.md item 5).
+
+**Checked and found not to diverge.** `user_id` and `session_id` are bound, never interpolated,
+and every store filters with `(? IS NULL OR col = ?)`: `None` means no filter, `""` means a user
+nobody is, on all three. `DuckDBLedgerStore.view(name)` interpolates its argument, but it is
+DuckDB-only, reached from tests alone, and takes no HTTP input; not a parity question.
+`execute(sql, params)` is the lifecycle's surface, not a caller's.
+
+**The test now covers the edges, not the fix.**
+`test_the_two_embedded_ledgers_agree_at_the_edges_of_every_caller_number` holds SQLite and
+DuckDB equal at `limit` ∈ {-1, 0, 1, N, 10^12}, `days` ∈ {-1, 0, 1, 30, 10^6, 10^12}, and the
+empty-string filters, with the expected row counts asserted, so the next backend is held to the
+same edges rather than to a happy path. Sol's `tests/review/test_t4_duckdb_adversarial.py`
+passes unmodified.
