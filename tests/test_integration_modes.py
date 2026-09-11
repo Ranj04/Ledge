@@ -21,6 +21,7 @@ import pytest
 from app.assembler.assemble import assemble
 from app.assembler.tiering import TierRegistry
 from app.cortex.mock_client import MockCortexClient
+from app.cortex.tokens import count_tokens
 from app.everos.mock_client import MockEverOSClient
 
 SEED = Path("data/seed/students.json")
@@ -178,3 +179,112 @@ async def test_editing_a_profile_memory_costs_one_turn_of_cache_and_then_recover
 
     _, recovered = await turn("one more on molarity")
     assert recovered.usage.cached_tokens > after.usage.cached_tokens
+
+
+# ---------------------------------------------------------------------------
+# The live tier-1 finding (BLOCKERS.md, "tier 1 is byte-stable but does not
+# cache"), pinned offline.  Recorded 2026-08-07 against real OpenAI:
+# `cached_tokens` came back as exactly 2268 -- the system message, whole -- on
+# turns 2, 3, 4 and 5 of one conversation, and never grew.  The simulator, fed
+# the same conversation, grows the cached prefix by one exchange per turn.
+# The three tests below say precisely where the two agree and where they part.
+# ---------------------------------------------------------------------------
+
+
+async def run_wire(mode: str = "tiered") -> dict:
+    """`run_conversation`, plus what the OpenAI client would put on the wire."""
+    from app.cortex.openai_client import _messages
+
+    run = await run_conversation(mode)
+    run["wires"] = [_messages(p) for p in run["prompts"]]
+    return run
+
+
+async def test_the_simulator_bills_the_bytes_the_openai_client_sends():
+    """The crux of the tier-1 investigation.  If the simulator were fed a
+    history the real client never sent, it would be measuring a prompt that
+    does not exist.  It is not: block for block, the simulator's input is the
+    wire -- the same system parts, the same flattened messages, the same role
+    framing.  Both consume one `AssembledPrompt`, and this pins that neither
+    translation drifts from the other."""
+    from app.cortex.cache_sim import flatten_prompt
+
+    run = await run_wire()
+    for prompt, wire in zip(run["prompts"], run["wires"]):
+        blocks = flatten_prompt(prompt)
+        n_sys = len(prompt.system_blocks)
+        sim_system = "".join(b.text for b in blocks[:n_sys])
+        wire_system = "".join(p["text"] for p in wire[0]["content"])
+        assert sim_system == wire_system
+        sim_messages = "".join(b.text for b in blocks[n_sys:])
+        wire_messages = "".join(f"\n\n{m['role']}: {m['content']}" for m in wire[1:])
+        assert sim_messages == wire_messages
+
+
+async def test_the_second_turn_caches_the_system_message_and_none_of_the_first_turn():
+    """The wire for turn 1 ends `user: <tier 2/3 lines><question>`; the history
+    turn 2 carries says `user: <question>`.  They diverge at the first byte of
+    the user turn, so nothing of turn 1's transcript can be read back on turn
+    2 -- the simulator credits exactly the system message (tiers 0 and 1) and
+    not one token more.  That is what the live run reported on turn 2 as
+    well; the simulator does model the mismatch.  A simulator that credited
+    the first exchange here would be reporting a prefix the provider cannot
+    match."""
+    run = await run_conversation("tiered")
+    second, prompt = run["usages"][1], run["prompts"][1]
+    assert second.cached_tokens == prompt.tier_cumulative_tokens[1]
+
+
+def _openai_implicit_cached(wires: list[list[dict]]) -> list[int]:
+    """OpenAI's *documented* implicit prompt-cache rule for GPT-5.6 and later
+    (developers.openai.com/api/docs/guides/prompt-caching), applied to the
+    wire bytes.  Quoting it: the implicit breakpoint sits "at the end of the
+    latest eligible message" -- eligible being user messages, the last tool
+    response of a group, and the last developer message of the initial group;
+    lookup walks "the implicit breakpoint, up to 20 earlier eligible message
+    endings, and the endpoint of the initial consecutive block of developer
+    messages", longest first; and "cache reuse requires the entire rendered
+    prefix to match".  An assistant message's ending is never a boundary.
+    Token counts are cl100k, the app's own counter; the shape is the point."""
+    import hashlib
+
+    written: set[str] = set()
+    out = []
+    for wire in wires:
+        rendered, text, cum = [], "", 0
+        for m in wire:
+            body = m["content"] if isinstance(m["content"], str) else "".join(
+                p["text"] for p in m["content"]
+            )
+            text += f"<|{m['role']}|>{body}<|end|>"
+            cum += count_tokens(body)
+            rendered.append((m["role"], hashlib.sha256(text.encode()).hexdigest(), cum))
+        boundaries = [rendered[0]] + [r for r in rendered[1:] if r[0] == "user"]
+        cached = next((cum for _, key, cum in sorted(boundaries, key=lambda r: -r[2])
+                       if key in written), 0)
+        out.append(cached)
+        written.add(rendered[0][1])
+        written.add(max((r for r in rendered if r[0] == "user"), key=lambda r: r[2])[1])
+    return out
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="BLOCKERS.md, 'tier 1 is byte-stable but does not cache': on the OpenAI "
+    "implicit path the cached prefix freezes at the system message because no "
+    "user-message ending in the history matches a prefix an earlier turn wrote. "
+    "Un-xfail when the OpenAI-path layout is changed so that it does.",
+)
+async def test_the_cached_prefix_grows_across_turns_on_the_openai_implicit_path():
+    """The test that would have caught the freeze.  Under the documented rule,
+    turn 3 should cache more than turn 2 -- the conversation is append-only
+    and turn 2's transcript is on turn 3's wire.  Today it does not: turn 1
+    wrote its prefix through `user: <tier 2/3 lines><question>`, turn 3's
+    lookup boundary in that position is `user: <question>`, and the only
+    boundary that matches is the end of the system message.  Frozen at the
+    system message for the whole conversation, which is the recorded live
+    signature (exactly 2268 tokens on turns 2, 3, 4 and 5)."""
+    run = await run_wire()
+    cached = _openai_implicit_cached(run["wires"])
+    assert cached[1] > 0, "turn 2 reads the system message"
+    assert cached[2] > cached[1], "turn 3 should read turn 2's transcript as well"

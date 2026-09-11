@@ -1645,3 +1645,52 @@ error-decoder URL inside an error-message string — neither is fetched.
 **Ownership note.** `web/` is Sol's directory. The round-2 instruction named the fix, the files
 and the grep target, and the change is six lines in two files; spawning a Sol task for it would
 have added a round-trip to a two-minute edit. Recorded here so the crossing is visible.
+
+### D48 — 2026-09-10 — tier 1 was cached all along; the freeze is OpenAI's implicit rule meeting our unrecorded user turn; the instrument stays
+
+**The question.** The simulator reported tier 0 and tier 1 cached at 85.7% each; the live run on
+2026-08-07 reported tier 0 at ~85% and tier 1 at 0%, with `cached_tokens` frozen at exactly 2268 on
+turns 2–5. BLOCKERS.md carried a hypothesis — the final user turn sends `tier2 + tier3 + question`
+and history records the bare question — with an instruction not to assume it. The full account,
+with numbers, is the dated status block under "tier 1 is byte-stable but does not cache" in
+`BLOCKERS.md`. This entry records the calls.
+
+**Call 1 — "tier 1 at 0%" is attribution, not caching.** The reconstructed 2026-08-07 system
+message counts 2,274 tokens (`cl100k`, ours) / 2,270 (`o200k`); the app's tier-1 boundary was
+2,275; OpenAI, which reports the exact boundary for GPT-5.6+, said 2,268. `tier_was_cached` is a
+strict `>=` against the app's own count, so the provider's whole-system-message hit was recorded as
+"tier 0 yes, tier 1 no". Under-credits the product, every turn. The fix is in `app/contracts.py`
+(protected) and `app/telemetry/cost.py`, and how much slack a boundary should tolerate is a design
+decision — escalated rather than picked. Pinned as a strict xfail in `tests/test_cost.py`.
+
+**Call 2 — the hypothesis named the right cause and the wrong mechanism, and the instrument is
+not changed.** The mismatch is real (byte 0 of every recorded user turn), but "match stops at the
+last agreeing byte" predicts one-turn-lagged growth — what the simulator reports — not a freeze.
+OpenAI's documented implicit rule does predict the freeze: lookups happen only at user-message
+endings and the system-block end, never at an assistant ending, and every user-message ending in
+our history sits on the mismatched bytes. Applied to our wire it gives 0, 2342, 2342, 2342, …:
+the recorded signature. The simulator is fed the wire bytes (pinned) and credits exactly the
+system message on turn 2 (pinned); its growth on turns 3+ is Cortex's rule — our explicit
+breakpoint on the last assistant turn is a write position there and the 20-block lookback finds
+it. That rule is what `cache_sim.py` was built to implement and what D16 verified against the
+documentation. **It is a correct instrument for Cortex and is not an instrument for OpenAI implicit
+caching.** Adding a second rule to it would be a change to the measurement instrument, which
+Appendix A reserves; not done.
+
+**Call 3 — say how much, in the README.** The simulator's history credit is 6,740 of 78,424 tiered
+prompt tokens over the seeded sweep (mean 321 a turn). Clamped, its 52.72% reads 42.79%, next to
+the live 42.9%. The Stage 1–4 table's *deltas* are unaffected — all four columns carry the same
+credit — but its absolute tiered figures are Cortex-rule figures, and the README now says so
+beside them. The live number remains the number to quote for OpenAI.
+
+**Call 4 — two fixes measured, neither shipped.** Recording the wire bytes in history makes the
+cache grow and the bill rise: +74% tiered prompt tokens, reduction 52.72% → 20.97% under the
+simulator. Rejected on measurement. Moving tier 2/3 into a trailing system message after the
+question, on the OpenAI path only, recovers the growth under the documented rule (48.14% →
+56.22%, writes unobservable) with no bloat — but it is in `openai_client.py`, outside this task's
+files; it puts context after the question, which only a live transcript can clear; and there is no
+key. The growth test is written and xfailed so that landing it is one deletion, not a rediscovery.
+
+**Why strict xfails in `tests/`, not `tests/review/`.** The gate must stay green and the defects
+must stay visible. `xfail(strict=True)` does both: the suite passes today, and the first change
+that fixes either defect turns an XPASS into a failure that forces the marker out.

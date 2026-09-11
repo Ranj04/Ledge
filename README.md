@@ -185,6 +185,17 @@ Two kinds of measurement appear in this document, and each carries its own prove
   **Simulator.** All four columns come from `CORTEX_PROVIDER=sim` runs on 2026-09-10, all
   committed — `results/2026-09-10-simulator.json`, `…-stage2.json`, `…-stage3.json` and
   `…-stage4.json` — and none is a live measurement.
+- **The two are not the same instrument, and the difference is quantified.** The simulator
+  implements Cortex's explicit-breakpoint rule, under which our breakpoint on the last assistant
+  turn lets the cached prefix grow by one exchange per turn. OpenAI's implicit cache looks up only
+  at user-message endings and the system block (its documentation, quoted in
+  `tests/test_integration_modes.py`), and with the current layout none of ours ever match: live, the
+  cached prefix stayed at the system message for a whole conversation. Over the seeded sweep that
+  history credit is 6,740 of 78,424 tiered prompt tokens; clamp it and the simulator's 52.7% reads
+  42.8%, beside the live 42.9%. The Stage 1 / 2 / 3 / 4 simulator table carries Cortex-rule
+  figures — its *deltas* are sound, its absolute tiered figures are not OpenAI figures. Quote the
+  live 42.9% for OpenAI. The diagnosis, and the layout that would recover the credit on OpenAI, are in
+  `BLOCKERS.md`, "tier 1 is byte-stable but does not cache" (`DECISIONS.md` D48).
 
 In both cases `cached_tokens` is **derived**, never assigned: on a live call it is read off
 `usage.prompt_tokens_details` in the API response; offline it comes from the simulator's prefix

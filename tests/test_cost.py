@@ -161,3 +161,39 @@ def test_the_call_record_carries_the_fields_the_ledger_needs():
         call.cost_uncached_usd + call.cost_cached_usd + call.cost_write_usd + call.cost_output_usd
     )
     assert call.baseline_cost_usd > 0
+
+
+# ---------------------------------------------------------------------------
+# The tier boundary against a provider's own count
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="BLOCKERS.md, 'tier 1 is byte-stable but does not cache': attribution "
+    "compares the provider's exact count against the app's cl100k cumulative with "
+    "a strict >=, so a count a few tokens short marks a whole tier uncached. "
+    "The fix is in app/contracts.py::tier_was_cached and _rate_for_region above, "
+    "and both are outside the tier-1 investigation's remit; un-xfail with it.",
+)
+def test_a_provider_count_a_few_tokens_short_of_the_boundary_still_attributes_the_tier():
+    """Recorded live, 2026-08-07: `cached_tokens` = 2268 against a system
+    message the app counted as 2275 tokens through the end of tier 1 (its
+    o200k count is 2270; the model's own tokenizer is not in tiktoken).  The
+    provider served the whole system message from cache and the ledger
+    recorded tier 1 -- 1,161 tokens of profile -- as uncached, on every turn,
+    for a 7-token shortfall at the boundary.  Tier 0 was credited, so the
+    dashboard read 85% / 0%.  Whatever the fix, the two figures below must
+    come out as one cached tier, not zero."""
+    prompt = AssembledPrompt(
+        system_blocks=[],
+        messages=[],
+        mode="tiered",
+        injected=[InjectedMemory("m_profile", "profile", 1, 40, 1)],
+        tier_cumulative_tokens={0: 1114, 1: 2275},
+    )
+    live = usage(input_tokens=3191, cached_tokens=2268)
+    assert prompt.tier_was_cached(1, live.cached_tokens)
+    _, injections = build_records(prompt, live, session_id="s", user_id="u", latency_ms=0.0,
+                                  pricing=P)
+    assert injections[0].was_cached
