@@ -1211,3 +1211,86 @@ tier region with ids out-of-band — would recover most of the 2,200 tokens and 
 next experiment. Not done here: T3 is integration, not redesign, and the per-memory `id` is
 what lets `mock_client._memory_lines` and the ablation harness reconcile a prompt against the
 ledger row by row.
+
+### D42 — 2026-09-10 — Stage 3: the provenance moved from the memory to the region, and 96% of the Stage 2 rise came back
+
+**What changed.** The `<memory id type origin>` element is gone. Inside every tier the agent's
+own memories (`skill`, `case`) are wrapped once in `<tutor_notes>…</tutor_notes>` and the
+user-derived ones (`profile`, `fact`, `episode`, `foresight`) once in
+`<observations>…</observations>`. Each memory is a `- ` bullet on one line, whitespace
+collapsed, `<` `>` `&` escaped. The system prompt defines the two wrappers in one 68-token
+paragraph (tier 0, cached after the first turn). Neither the memory's id nor its type is on
+the wire.
+
+**Why each remaining piece earns its place.** The `- ` prefix is one token and is not
+decoration: without it a memory whose whole content is `## How to tutor this student` *is* a
+line-initial header (corpus case `forged_tier_header_exact`). The escape is what makes the
+wrappers trustworthy: they are tags, so a memory containing `</observations>` must not render
+as a raw close tag even mid-line, where a model — unlike the line-anchored parser — might read
+it. The five tag-forgery corpus cases (`forged_agent_element`, `forged_close_tag_mid_content`,
+`exactly_close_tag`, `nested_unbalanced_openers`, `pre_escaped_lt_memory`) test exactly that
+and are untouched; no memory in the seed corpus contains `<`, `>` or `&`, so the escape costs
+nothing there. The close tag marks where the data ends before the student's question, a
+boundary neither earlier format drew. The leading-markup strip stays gone: `-40 C is not 40 C`
+renders as `- -40 C is not 40 C`, byte for byte, and the corpus pins it.
+
+**Measurement.** Simulator, paired, 3 conversations × 4 runs, same corpus and transcript,
+`results/2026-09-10-simulator-stage3.json` against the two committed artifacts:
+
+| input-side, per conversation | bullets | elements | region wrappers | stage 3 vs bullets |
+|---|---|---|---|---|
+| cost, naive | $0.05115 | $0.08207 | $0.05231 | +2.3% |
+| cost, tiered | $0.02437 | $0.03873 | $0.02497 | +2.5% |
+| reduction, mean | 52.35% | 52.81% | 52.26% | −0.09 pt |
+| cache hit rate, tiered | 61.88% | 62.56% | 62.06% | +0.18 pt |
+| prompt tokens, naive / tiered | 25,574 / 25,686 | 41,035 / 41,504 | 26,155 / 26,414 | +2.3% / +2.8% |
+| total incl. output, naive / tiered | $0.06306 / $0.03629 | $0.09399 / $0.05064 | $0.06423 / $0.03689 | +1.8% / +1.7% |
+
+Of the Stage 2 rise, 96.2% (naive) and 95.8% (tiered) is recovered. The composition of what
+is left, measured on a first turn against the seed corpus (104 memories): memory tokens are
+identical to Stage 1 (3,018 vs 3,018 — 13 tokens for a typical memory against 34 as an
+element); the system-prompt paragraph is +68; the wrapper lines are +36 in `tiered` (five
+regions) and +15 in `naive` (two). The reduction moved *down* by a hair as the bill moved
+down, the D41 mechanism in reverse. All 12 runs produced identical answers in both modes.
+
+**The naive baseline.** `naive` now partitions by side — the agent's notes, then the
+observations, each still in relevance order. The first cut wrapped runs of the interleaved
+relevance order as-is, and the measurement said no: the 104 memories change side 47 times, so
+`naive` paid 360 wrapper tokens a turn against `tiered`'s 36, a ~10% handicap on its
+first-turn prompt that has nothing to do with caching. `naive` has no cache, so its order
+cannot change its cost; the partition only decides how many wrappers it pays, and two is the
+fewest. The change runs in the baseline's favour. The same pass fixed a bug the first cut
+introduced — `ContentBlock.memory_ids` and `injected` listed naive's memories in a different
+order from its text — which the new injection assertion caught.
+
+**What `_memory_lines` actually needed.** It fed `_read_prompt`, which threw the ids away on
+the next line: `sorted(set(body for _, body in memories))`. The composer answers from bodies
+and the question; nothing in `app/` consumed a parsed id, and the ablation harness never
+parsed prompt text at all (it calls `_render` for a token count). D41's closing claim — that
+the id is what lets the simulator and the harness reconcile a prompt against the ledger — was
+not true of the code: that reconciliation runs through `AssembledPrompt.injected` and
+`ContentBlock.memory_ids` (`app/telemetry/cost.py`, `/api/inspect`). So the parser returns
+bodies only, and is now region-aware: a `- ` line inside a wrapper is a memory; a bullet
+outside one — a question that starts with a dash — is the student's text. That is stricter
+than Stage 1's "any `- ` line anywhere", not looser.
+
+**Tests.** Injection assertion (c) used to check that the ids parsed from the text equalled
+the ids in `injected`, which showed the text agreed with itself. It now checks, block by
+block, that `_memory_lines(block.text)` equals the collapsed bodies of `block.memory_ids` in
+order; that the final message's bodies equal those of the injected memories in no system
+block; that the whole prompt's bodies equal `injected`'s in order; that the id set is exactly
+the input set; and the same for `naive`'s one block. The out-of-band accounting is held to the
+text position by position in both modes — stronger, and it found the ordering bug above. (a)
+replaced "one well-formed element" with "one `- ` line carrying no raw `<` or `>`"; (b) gains
+one open and one close wrapper per (tier, side) that holds a memory. The extraction helper in
+`test_both_modes_carry_the_same_memory_text` changed one comprehension
+(`{body for _, body in …}` → `set(…)`), which Appendix A anticipates; its assertion is
+byte-identical. `tests/review/test_tracka_round1.py` updated its format line. The corpus is
+untouched: 29 cases, 61 tests. `tests/test_limits.py::ONE_TURN_CEILING_USD` was re-derived
+from measurement as its own comment instructs ($0.03 → $0.025): a turn now reserves $0.0198
+and reconciles to $0.0101, so one measured plus one reserved ($0.0298) slipped under $0.03 and
+the isolation control stopped controlling.
+
+**Given up.** Per-memory ids and types in the prompt, and with them the ability of anything to
+re-identify a memory from rendered text alone — which nothing did. Not re-measured live: no
+`OPENAI_API_KEY`, and the `BLOCKERS.md` item stays open, now for Stage 3 as well.

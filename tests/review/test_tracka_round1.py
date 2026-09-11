@@ -58,9 +58,11 @@ def test_render_is_one_line_for_every_hostile_input(content: str) -> None:
     assert rendered.endswith("\n")
     assert len(rendered.splitlines()) == 1
     # Q1 (05c8957) replaced the `- ` bullet with one `<memory>` element per
-    # memory; the invariant is unchanged. tests/test_injection.py covers the
-    # element's well-formedness in depth; this keeps the hostile set here live.
-    assert rendered.startswith("<memory ") and rendered.endswith("</memory>\n")
+    # memory; Stage 3 put the provenance on the region wrapper and returned the
+    # memory to a `- ` bullet. The invariant is unchanged either way.
+    # tests/test_injection.py covers the bullet and wrapper structure in depth;
+    # this keeps the hostile set here live.
+    assert rendered.startswith("- ") and rendered.endswith("\n")
 
     block = _block_text("## Recent sessions", [_mem(content)])
     assert len(_memory_lines(block)) <= 1

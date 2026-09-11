@@ -54,16 +54,18 @@ def test_a_principal_over_the_spend_ceiling_gets_402_before_the_model_is_called(
 
 # What one tiered turn against the seeded corpus reserves before the model is
 # called, measured on 2026-09-10 through `SpendCeiling.reserve` with the
-# provenance-element prompt format (Q1): a ~5,461-token prompt reserves $0.0252
+# Stage 3 region-wrapper prompt format: a ~3,300-token prompt reserves $0.0198
 # (prompt tokens at the cache-write rate plus 960 output tokens), its floor is
-# $0.0109, and it reconciles to ~$0.015 once the turn is billed. The ceiling
+# $0.0066, and it reconciles to ~$0.0101 once the turn is billed. The ceiling
 # sits between one reservation and two — one call fits, and a second on the
-# same key ($0.015 measured + $0.025 reserved) does not — which is what lets the
-# test below fail if spend ever leaks between principals. The previous value,
-# $0.007, was derived the same way against the pre-Q1 bullet format (~3,500
-# tokens) and refused even the first call once the prompt grew. Re-derive it
-# from the measurement whenever the prompt size changes; do not nudge it.
-ONE_TURN_CEILING_USD = "0.03"
+# same key ($0.0101 measured + $0.0197 reserved = $0.0298) does not — which is
+# what lets the test below fail if spend ever leaks between principals. The
+# previous values were derived the same way: $0.03 against the Q1 element
+# format (~5,461 tokens, $0.0252 reserved, ~$0.015 reconciled), which the
+# slimmer prompt slipped under, and $0.007 against the pre-Q1 bullets, which
+# refused even the first call once the prompt grew. Re-derive it from the
+# measurement whenever the prompt size changes; do not nudge it.
+ONE_TURN_CEILING_USD = "0.025"
 
 
 def test_one_principals_spend_does_not_count_against_another(tmp_path, monkeypatch):

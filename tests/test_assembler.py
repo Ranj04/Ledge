@@ -133,7 +133,7 @@ def test_both_modes_carry_the_same_memory_text(memories):
         for msg in prompt.messages:
             c = msg["content"]
             text += c if isinstance(c, str) else "".join(p["text"] for p in c)
-        return {body for _, body in _memory_lines(text)}
+        return set(_memory_lines(text))
 
     naive = assemble(memories, user_message="q", mode="naive")
     tiered = assemble(memories, user_message="q", mode="tiered", registry=reg(), now=NOW)

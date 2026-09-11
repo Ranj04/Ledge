@@ -191,40 +191,53 @@ def _read_prompt(prompt: AssembledPrompt) -> tuple[list[str], str]:
         text = content if isinstance(content, str) else "".join(
             p.get("text", "") for p in content
         )
-        memories.extend(_memory_lines(text))
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped and not (
-                _MEMORY_ELEMENT.match(stripped) or stripped.startswith(("## ", "### "))
-            ):
-                query_parts.append(stripped)
+        bodies, query_parts = _scan(text)
+        memories.extend(bodies)
 
     # Sorted so the composer cannot depend on layout order.
-    return sorted(set(body for _, body in memories)), " ".join(query_parts)
+    return sorted(set(memories)), " ".join(query_parts)
 
 
-# Exactly the element `assemble._render` emits, anchored to the whole line.
-# Attribute order fixed; the body can hold no raw `<` or `>` because the
-# renderer escapes them, so the greedy `.*` cannot run past a forged close tag.
-_MEMORY_ELEMENT = re.compile(
-    r'<memory id="([^"]*)" type="([^"]*)" origin="(agent|user)">(.*)</memory>$'
-)
+# Exactly the region wrappers `assemble._block_text` emits, whole-line. A
+# memory cannot produce one: it is rendered on a single line with `<` escaped.
+_REGION_TAG = re.compile(r"</?(tutor_notes|observations)>$")
 
 
-def _memory_lines(text: str) -> list[tuple[str, str]]:
-    """`(memory_id, body)` for every well-formed memory element, in text order.
+def _scan(text: str) -> tuple[list[str], list[str]]:
+    """Split `text` into memory bodies and everything else, in text order.
 
-    Anything that is not a whole-line, well-formed element is not a memory.
-    The previous parser treated any line starting `- ` as one, which is exactly
-    the re-parse a hostile memory exploited. The body is unescaped so the
-    composer sees the memory's real content, as a model would.
+    A memory is a `- ` line inside a `<tutor_notes>` or `<observations>`
+    region; the body is unescaped so the composer sees the real content, as a
+    model would. A bullet outside a region -- a question that happens to start
+    with a dash -- is the student's text, not a memory. The previous parser
+    treated any `- ` line anywhere as a memory, which is exactly the re-parse a
+    hostile memory exploited; region-awareness is what replaces it.
+
+    "Everything else" is the non-empty lines outside every region that are not
+    a `## ` tier header: in the final user message, that is the question.
+
+    No ids. The composer answers from content, and the accounting carries the
+    ids out of band in `AssembledPrompt.injected` / `ContentBlock.memory_ids`
+    -- the simulator does not need to reconcile the prompt against the ledger,
+    and a model could not.
     """
-    out: list[tuple[str, str]] = []
+    bodies: list[str] = []
+    rest: list[str] = []
+    inside = False
     for ln in text.splitlines():
-        match = _MEMORY_ELEMENT.match(ln.strip())
-        if match:
-            out.append((html.unescape(match.group(1)), html.unescape(match.group(4))))
-    return out
+        if _REGION_TAG.match(ln):
+            inside = not ln.startswith("</")
+        elif inside:
+            if ln.startswith("- "):
+                bodies.append(html.unescape(ln[2:]))
+        elif ln.strip() and not ln.startswith("## "):
+            rest.append(ln.strip())
+    return bodies, rest
+
+
+def _memory_lines(text: str) -> list[str]:
+    """The body of every memory in `text`, in text order."""
+    return _scan(text)[0]
 
 
 # ---------------------------------------------------------------------------
