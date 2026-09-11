@@ -272,6 +272,85 @@ compared against `CALL_LOG`. Not attempted — it is a credibility check, not a 
 it any more; it needs an `OPENAI_API_KEY` to measure a fix against, and none is on the build
 machine.
 
+**Status, 2026-09-10 (branch `stage4/tier1-cache`): diagnosed, not fixed.** Two separate things
+were being read as one, and the original text below is kept because it records both correctly
+observed and one of them wrongly explained.
+
+1. **Tier 1 *was* cached live; the ledger's attribution said it was not.** Reconstructing the
+   2026-08-07 system message from the committed corpus (bullet format, that day's system prompt,
+   `stu_maya_chen`): tiers 0+1 count **2,274** tokens in `cl100k_base` — the app's counter — and
+   **2,270** in `o200k_base`; the app's `tier_cumulative_tokens[1]` was **2,275**. OpenAI's docs say
+   GPT-5.6+ reports the "exact eligible boundary, excluding hidden tokens", and it reported
+   **2,268** — the whole system message in the model's own tokenizer, which `tiktoken` does not
+   carry. `AssembledPrompt.tier_was_cached(1, 2268)` is `2268 >= 2275`, false, and
+   `app/telemetry/cost.py::_rate_for_region` makes the same strict comparison — so every tier-1
+   memory was attributed at full price on every turn and the dashboard read 85% / 0%. A 7-token
+   shortfall at the boundary flipped 1,161 tokens of profile to "uncached". The call cost itself
+   was right (it uses the provider's `cached_tokens` directly); only the per-tier and per-memory
+   attribution was wrong, and it was wrong in the direction of *under*-crediting the product. The
+   fix lives in `app/contracts.py` (protected) and `app/telemetry/cost.py`, and what the boundary
+   should tolerate is a design call, not a builder's — escalated. Pinned, `xfail(strict=True)`:
+   `tests/test_cost.py::test_a_provider_count_a_few_tokens_short_of_the_boundary_still_attributes_the_tier`.
+
+2. **The freeze is real, and the hypothesis below is right about the cause and wrong about the
+   consequence.** Wire versus history, measured: turn N sends `user: <tier 2/3 lines><question>`
+   (910–955 tokens); turn N+1 records `user: <question>` (11–38 tokens). They diverge at **byte 0
+   of the user turn**, every turn. But "the prefix match stops at the last byte they agree on"
+   predicts growth with a one-turn lag — turn 3 reading through assistant turn 1 — which is
+   exactly what the simulator reports (2340 → 2535 → 2642 → 2730 → 2882 → 3072 over seven turns)
+   and is *not* what live showed. OpenAI's documented implicit rule for GPT-5.6+
+   (developers.openai.com/api/docs/guides/prompt-caching) explains the freeze exactly: the
+   implicit breakpoint sits "at the end of the latest eligible message"; lookup walks "the
+   implicit breakpoint, up to 20 earlier eligible message endings, and the endpoint of the initial
+   consecutive block of developer messages"; eligible messages are user messages, tool responses
+   and the initial developer messages. **An assistant message's ending is never a boundary.**
+   Every user-message ending in our history sits precisely on the mismatched bytes, so no history
+   boundary can ever match a written entry, and the only match is the system-block end. Applied
+   mechanically to our wire bytes (`tests/test_integration_modes.py::_openai_implicit_cached`):
+   cached per turn is 0, 2342, 2342, 2342, 2342, 2342, 2342 for all three seeded conversations —
+   the recorded signature. It also explains why D29's explicit breakpoints bought only 0.6 points:
+   ours sit on tier 0, tier 1 and the last *assistant* turn.
+
+3. **The simulator does see the wire.** `cache_sim.flatten_prompt` and `openai_client._messages`
+   produce byte-identical system parts and messages from the same `AssembledPrompt`, on every
+   turn (pinned: `test_the_simulator_bills_the_bytes_the_openai_client_sends`), and on turn 2 the
+   simulator credits exactly the system message — 2,340 — and nothing of turn 1's transcript
+   (pinned: `test_the_second_turn_caches_the_system_message_and_none_of_the_first_turn`). It does
+   model the mismatch. Where it parts from OpenAI is turns 3 onward: its growth comes from *our
+   explicit breakpoint on the last assistant turn*, which under Cortex's rule (D16) is a legal
+   write position that the next turn's 20-block lookback finds. On OpenAI's implicit path that
+   position is neither written nor looked up. **The instrument is correct for the rule it models
+   and is not an instrument for OpenAI implicit caching**; the history-growth credit exists under
+   one rule and not the other. `cache_sim.py` is unchanged.
+
+4. **Quantified** (three seeded conversations × 7 turns, `cl100k`, the Stage 4 format; the
+   simulator sweep reproduces README's Stage 4 column exactly, 52.72% / 62.30%):
+   - tokens the simulator credits *beyond* the system message: **6,740 of 78,424** tiered prompt
+     tokens (8.6%) — 0 on turns 1–2, 157–202 on turn 3, 690–837 by turn 7, **mean 321 per turn**;
+   - clamp that credit at the system message and the simulator's own accounting gives
+     **42.79% / 53.71%** instead of 52.72% / 62.30%. That sits beside the live 42.9% / 47.9% —
+     different conditions (real answers, bullet format, writes unobservable), same shape;
+   - OpenAI's documented rule on the shipped layout, writes unobservable: 48.14% / 53.73%.
+
+5. **Fixes measured and not shipped.** (a) *Record the wire bytes in history* so every
+   user-message ending matches: the whole previous prompt then caches, but every later prompt
+   carries every earlier turn's ~920 memory tokens — tiered prompt tokens 78,424 → **136,331**
+   (+74%), reduction 52.72% → **20.97%** under the simulator. Rejected. (b) *Move tier 2/3 out of
+   the final user message into a trailing system message after the question, on the OpenAI path
+   only*: turn N's implicit breakpoint is then `user: <question>`, which turn N+1's history
+   reproduces byte for byte. Under the documented rule: 0, 2361, 2578, 2663, 2749, 2903, 3088 —
+   growth of about one exchange per turn; **62.70% hit / 56.22% reduction** (writes unobservable)
+   against 48.14% as shipped, ~337 tokens a turn recovered. Not implemented: it lives in
+   `app/cortex/openai_client.py::_messages` (outside this investigation's files), it moves the
+   memory context *after* the question, which only a live run can say is harmless to the answer,
+   and there is no key to measure it with. The test that confirms it is written and xfailed:
+   `tests/test_integration_modes.py::test_the_cached_prefix_grows_across_turns_on_the_openai_implicit_path`.
+
+*To resolve, with a key:* run the five-turn conversation twice — as shipped (expect 2268, frozen)
+and with (b) (expect growth of roughly one exchange per turn) — and read both transcripts. If it
+holds, land (b), un-xfail the growth test, and settle the attribution boundary in item 1 at the
+same time; then re-run `scripts/experiment.py` and let the headline follow.
+
 The ledger shows tier 0 at an **85%** cache hit rate and tier 1 at **0%**. That should not follow
 from the layout: both blocks are assembled from always-injected memories sorted by `memory_id`, and
 a direct check confirms both are **byte-identical across turns** (tier 0: 5,772 chars every turn;
