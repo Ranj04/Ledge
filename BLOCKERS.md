@@ -321,9 +321,10 @@ to show if anyone asks to see the tables.
 ## 2026-09-10 — No live `results/*.json` artifact exists
 
 **Status:** open. Needs an `OPENAI_API_KEY` and about ten minutes. Re-confirmed at T3.2: the
-key is still absent, so `results/` holds three simulator artifacts (Stage 1 bullets, Stage 2
-elements, Stage 3 region wrappers) and no live one; the effect of either provenance format on
-the live 42.9% is unmeasured (DECISIONS.md D41, D42; README.md beside the headline).
+key is still absent, so `results/` holds four simulator artifacts (Stage 1 bullets, Stage 2
+elements, Stage 3 region wrappers, Stage 4 per-line marks) and no live one; the effect of any
+provenance format on the live 42.9% is unmeasured (DECISIONS.md D41–D43; README.md beside the
+headline).
 
 The **42.9%** input-side reduction in `README.md` came from a live run on 2026-08-07 whose JSON
 output was not retained. Track C (C2) went to commit the artifact behind the headline and found
@@ -428,9 +429,9 @@ On Snowflake the column arrives through the untested `ALTER` path above.
 
 Stated once, plainly, at the end of the build. Each item points at the entry that carries it.
 
-1. **No live artifact.** No `OPENAI_API_KEY` on this machine. All three files in `results/` are
-   the simulator's, and say so in their `measurement` field. The Stage 2 and Stage 3
-   re-measurements (D41, D42) are simulator-only; the live 42.9% remains 2026-08-07, bullet
+1. **No live artifact.** No `OPENAI_API_KEY` on this machine. All four files in `results/` are
+   the simulator's, and say so in their `measurement` field. The Stage 2, 3 and 4
+   re-measurements (D41–D43) are simulator-only; the live 42.9% remains 2026-08-07, bullet
    format. See "No live
    `results/*.json` artifact exists" above.
 2. **The Snowflake embedding path has never been exercised.** `ablation/similarity.py ::

@@ -54,17 +54,21 @@ def test_a_principal_over_the_spend_ceiling_gets_402_before_the_model_is_called(
 
 # What one tiered turn against the seeded corpus reserves before the model is
 # called, measured on 2026-09-10 through `SpendCeiling.reserve` with the
-# Stage 3 region-wrapper prompt format: a ~3,300-token prompt reserves $0.0198
+# Stage 4 per-line mark format: a 3,264-token prompt reserves $0.01968
 # (prompt tokens at the cache-write rate plus 960 output tokens), its floor is
-# $0.0066, and it reconciles to ~$0.0101 once the turn is billed. The ceiling
-# sits between one reservation and two — one call fits, and a second on the
-# same key ($0.0101 measured + $0.0197 reserved = $0.0298) does not — which is
-# what lets the test below fail if spend ever leaks between principals. The
-# previous values were derived the same way: $0.03 against the Q1 element
-# format (~5,461 tokens, $0.0252 reserved, ~$0.015 reconciled), which the
-# slimmer prompt slipped under, and $0.007 against the pre-Q1 bullets, which
-# refused even the first call once the prompt grew. Re-derive it from the
-# measurement whenever the prompt size changes; do not nudge it.
+# $0.006528, and it reconciles to $0.010036 once the turn is billed. The
+# ceiling must sit between one reservation and two — at or above the floor so
+# the first call fits, and below one measured plus one reserved ($0.010036 +
+# $0.019598 = $0.029634) so a second call on the same key does not — which is
+# what lets the test below fail if spend ever leaks between principals. Any
+# value in [$0.0066, $0.0296) satisfies that; $0.025 does, and is the same
+# value the Stage 3 measurement gave ($0.0198 reserved, $0.0066 floor, $0.0101
+# reconciled, $0.0298 for two), because the marks shaved only ~36 tokens off a
+# turn. Earlier values were derived the same way: $0.03 against the Q1
+# element format (~5,461 tokens, $0.0252 reserved, ~$0.015 reconciled), which
+# the slimmer prompt slipped under, and $0.007 against the pre-Q1 bullets,
+# which refused even the first call once the prompt grew. Re-derive it from
+# the measurement whenever the prompt size changes; do not nudge it.
 ONE_TURN_CEILING_USD = "0.025"
 
 

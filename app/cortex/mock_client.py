@@ -29,10 +29,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
-import re
 import time
 from collections.abc import AsyncIterator
 
+from app.assembler.assemble import SIGIL
 from app.config import get_settings
 from app.contracts import AssembledPrompt, InferenceResult, StreamEvent, Usage
 from app.cortex.cache_sim import PromptCacheSimulator, flatten_prompt
@@ -175,69 +175,47 @@ class MockCortexClient:
 
 
 def _read_prompt(prompt: AssembledPrompt) -> tuple[list[str], str]:
-    """Recover the memory bodies and the student's question from the text.
+    """Recover the memory bodies and the student's question.
 
-    Deliberately done by parsing rather than by reading `prompt.injected`: the
-    simulator is standing in for something that only has the rendered prompt,
-    and parsing keeps it honest about what information it is allowed to use.
+    Bodies are parsed from the rendered text rather than read off
+    `prompt.injected`: the simulator is standing in for something that only
+    has the prompt, and parsing keeps it honest about what information it is
+    allowed to use.  The *boundary* between memory text and the question is
+    not parsed, though -- it is structure the assembler wrote.  The final user
+    turn is either the question alone or a list of content parts whose last
+    part is the question (`assemble._final_turn`), so the question is returned
+    verbatim and never scanned.  Before this, a question containing what looked
+    like a memory region was reclassified as memory and emptied
+    (`tests/review/test_s3_round1.py`); no parser can tell assembler-emitted
+    structure from content that merely resembles it, so the parser is not
+    asked to.
     """
     memories: list[str] = []
     for block in prompt.system_blocks:
         memories.extend(_memory_lines(block.text))
 
-    query_parts: list[str] = []
-    for msg in prompt.messages[-1:]:
-        content = msg["content"]
-        text = content if isinstance(content, str) else "".join(
-            p.get("text", "") for p in content
-        )
-        bodies, query_parts = _scan(text)
-        memories.extend(bodies)
+    content = prompt.messages[-1]["content"]
+    parts = [content] if isinstance(content, str) else [p.get("text", "") for p in content]
+    *memory_parts, question = parts
+    for part in memory_parts:
+        memories.extend(_memory_lines(part))
 
     # Sorted so the composer cannot depend on layout order.
-    return sorted(set(memories)), " ".join(query_parts)
-
-
-# Exactly the region wrappers `assemble._block_text` emits, whole-line. A
-# memory cannot produce one: it is rendered on a single line with `<` escaped.
-_REGION_TAG = re.compile(r"</?(tutor_notes|observations)>$")
-
-
-def _scan(text: str) -> tuple[list[str], list[str]]:
-    """Split `text` into memory bodies and everything else, in text order.
-
-    A memory is a `- ` line inside a `<tutor_notes>` or `<observations>`
-    region; the body is unescaped so the composer sees the real content, as a
-    model would. A bullet outside a region -- a question that happens to start
-    with a dash -- is the student's text, not a memory. The previous parser
-    treated any `- ` line anywhere as a memory, which is exactly the re-parse a
-    hostile memory exploited; region-awareness is what replaces it.
-
-    "Everything else" is the non-empty lines outside every region that are not
-    a `## ` tier header: in the final user message, that is the question.
-
-    No ids. The composer answers from content, and the accounting carries the
-    ids out of band in `AssembledPrompt.injected` / `ContentBlock.memory_ids`
-    -- the simulator does not need to reconcile the prompt against the ledger,
-    and a model could not.
-    """
-    bodies: list[str] = []
-    rest: list[str] = []
-    inside = False
-    for ln in text.splitlines():
-        if _REGION_TAG.match(ln):
-            inside = not ln.startswith("</")
-        elif inside:
-            if ln.startswith("- "):
-                bodies.append(html.unescape(ln[2:]))
-        elif ln.strip() and not ln.startswith("## "):
-            rest.append(ln.strip())
-    return bodies, rest
+    return sorted(set(memories)), question
 
 
 def _memory_lines(text: str) -> list[str]:
-    """The body of every memory in `text`, in text order."""
-    return _scan(text)[0]
+    """The body of every memory in assembler-emitted memory text, in order.
+
+    A memory is a line beginning with one of the two provenance marks; the
+    body is unescaped so the composer sees the real content, as a model would.
+    Headers, blank lines and the system prompt's prose are not memories. Only
+    call this on text the assembler emitted as memory text -- never on the
+    question, which is why `_read_prompt` keeps the two apart.
+    """
+    return [
+        html.unescape(ln[2:]) for ln in text.splitlines() if ln[:2] in SIGIL.values()
+    ]
 
 
 # ---------------------------------------------------------------------------
