@@ -1,11 +1,20 @@
 -- Dashboard rollups for the rolling 30-day ledger window.
-USE SCHEMA MEMORYLEDGER.LEDGER;
+--
+-- One file, two dialects. DuckDB loads it as-is (`DuckDBLedgerStore.init_schema`)
+-- and `tests/test_duckdb_store.py` reads every view back against the store's own
+-- queries. Snowflake: run it after 01_ddl.sql in the same session — that file
+-- selects MEMORYLEDGER.LEDGER; a `USE SCHEMA` here would not parse on DuckDB.
+-- Everything below is written in the intersection of the two: CASE rather than
+-- IFF, `CURRENT_TIMESTAMP - INTERVAL '30 days'` rather than DATEADD, ::DOUBLE
+-- rather than ::FLOAT (DuckDB's FLOAT is 4 bytes; Snowflake's DOUBLE is FLOAT).
+-- VERIFY-AT-EVENT: the Snowflake rendering of those three is checked against its
+-- documentation only; QUALIFY, COUNT_IF and the window functions are unchanged.
 
 CREATE OR REPLACE VIEW V_MEMORY_MONTHLY_COST AS
 WITH WINDOWED AS (
     SELECT *
     FROM MEMORY_INJECTIONS
-    WHERE TS >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+    WHERE TS >= CURRENT_TIMESTAMP - INTERVAL '30 days'
 ),
 ROLLUP AS (
     SELECT
@@ -13,10 +22,15 @@ ROLLUP AS (
         USER_ID,
         COUNT(*) AS INJECTIONS_30D,
         SUM(TOKENS) AS TOTAL_TOKENS_30D,
-        COUNT_IF(WAS_CACHED)::FLOAT / NULLIF(COUNT(*), 0) AS CACHE_HIT_RATE,
-        SUM(IFF(WAS_CACHED, TOKENS, 0)) AS CACHED_TOKENS_30D,
+        COUNT_IF(WAS_CACHED)::DOUBLE / NULLIF(COUNT(*), 0) AS CACHE_HIT_RATE,
+        SUM(CASE WHEN WAS_CACHED THEN TOKENS ELSE 0 END) AS CACHED_TOKENS_30D,
         SUM(ATTRIBUTED_COST_USD) AS COST_30D_USD,
-        GREATEST(1, DATEDIFF('day', MIN(TS), MAX(TS)) + 1) AS OBSERVED_DAYS
+        -- The span in fractional days, floored at one: the definition
+        -- `sqlite_store._project_monthly` uses, so the view and the dashboard
+        -- put the same number on a memory. Until DuckDB made this view runnable
+        -- it counted day boundaries plus one, and disagreed with the store on
+        -- 105 of 112 memories, by up to 2x (DECISIONS.md D44).
+        GREATEST(1, DATEDIFF('microsecond', MIN(TS), MAX(TS)) / 86400000000.0) AS OBSERVED_DAYS
     FROM WINDOWED
     GROUP BY MEMORY_ID, USER_ID
 )
@@ -37,12 +51,12 @@ SELECT
     CL.MODE,
     COUNT(*) AS INJECTIONS_30D,
     SUM(MI.TOKENS) AS TOKEN_VOLUME_30D,
-    COUNT_IF(MI.WAS_CACHED)::FLOAT / NULLIF(COUNT(*), 0) AS CACHE_HIT_RATE,
-    SUM(IFF(MI.WAS_CACHED, MI.TOKENS, 0))::FLOAT
+    COUNT_IF(MI.WAS_CACHED)::DOUBLE / NULLIF(COUNT(*), 0) AS CACHE_HIT_RATE,
+    SUM(CASE WHEN MI.WAS_CACHED THEN MI.TOKENS ELSE 0 END)::DOUBLE
         / NULLIF(SUM(MI.TOKENS), 0) AS TOKEN_WEIGHTED_CACHE_HIT_RATE
 FROM MEMORY_INJECTIONS AS MI
 JOIN CALL_LOG AS CL ON CL.CALL_ID = MI.CALL_ID
-WHERE MI.TS >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+WHERE MI.TS >= CURRENT_TIMESTAMP - INTERVAL '30 days'
 GROUP BY MI.TIER, CL.MODE;
 
 CREATE OR REPLACE VIEW V_MODE_COMPARISON AS
@@ -55,7 +69,7 @@ WITH CALL_STATS AS (
         AVG(BASELINE_COST_USD) AS MEAN_ZERO_CACHE_BASELINE_PER_CALL_USD,
         AVG(LATENCY_MS) AS MEAN_LATENCY_MS
     FROM CALL_LOG
-    WHERE TS >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+    WHERE TS >= CURRENT_TIMESTAMP - INTERVAL '30 days'
     GROUP BY MODE
 ),
 CONVERSATION_COSTS AS (
@@ -64,7 +78,7 @@ CONVERSATION_COSTS AS (
         SESSION_ID,
         SUM(COST_USD) AS CONVERSATION_COST_USD
     FROM CALL_LOG
-    WHERE TS >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+    WHERE TS >= CURRENT_TIMESTAMP - INTERVAL '30 days'
     GROUP BY MODE, SESSION_ID
 ),
 CONVERSATION_STATS AS (

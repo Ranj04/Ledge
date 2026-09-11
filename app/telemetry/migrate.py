@@ -1,9 +1,9 @@
-"""One schema, rendered to two dialects.
+"""One schema, rendered to three dialects.
 
 The ledger tables are declared once, in `migrations/`, as plain modules exposing
-`VERSION` and `TABLES`. This module renders them to SQLite or Snowflake and applies
-them through a `schema_migrations` version table, so both stores create exactly the
-same columns in the same order — `tests/test_migrations.py` asserts it.
+`VERSION` and `TABLES`. This module renders them to SQLite, DuckDB or Snowflake and
+applies them through a `schema_migrations` version table, so every store creates
+exactly the same columns in the same order — `tests/test_migrations.py` asserts it.
 
 Before this existed the schema was hand-copied in three places and had drifted
 (DECISIONS.md D37). The five logical types are the whole shared vocabulary; `_TYPES`
@@ -24,7 +24,12 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal
 
-Dialect = Literal["sqlite", "snowflake"]
+Dialect = Literal["sqlite", "duckdb", "snowflake"]
+# The two embedded dialects share more than a type map: a file on disk, transactional
+# DDL, `PRAGMA table_info` introspection, and widening by rebuild. Every branch below
+# that is not about a type name is about this split — and each was `== "sqlite"`
+# until the third dialect arrived, which is where the abstraction leaked.
+EMBEDDED = frozenset({"sqlite", "duckdb"})
 LOGICAL_TYPES = frozenset({"text", "int", "float", "timestamp", "bool"})
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
@@ -36,6 +41,13 @@ _TYPES: dict[str, dict[str, str]] = {
         "timestamp": "TEXT",
         "bool": "INTEGER",
     },
+    "duckdb": {
+        "text": "VARCHAR",
+        "int": "BIGINT",
+        "float": "DOUBLE",
+        "timestamp": "TIMESTAMP",
+        "bool": "BOOLEAN",
+    },
     "snowflake": {
         "text": "STRING",
         "int": "NUMBER",
@@ -45,11 +57,12 @@ _TYPES: dict[str, dict[str, str]] = {
     },
 }
 
-# What the database reports a column's type as once the table exists. SQLite echoes
-# the declared word; Snowflake's DESC TABLE spells its own canonical name with a
-# precision suffix, which `physical_shape` strips before comparing.
+# What the database reports a column's type as once the table exists. SQLite and
+# DuckDB echo the declared word; Snowflake's DESC TABLE spells its own canonical name
+# with a precision suffix, which `physical_shape` strips before comparing.
 _REPORTED_TYPES: dict[str, dict[str, str]] = {
     "sqlite": _TYPES["sqlite"],
+    "duckdb": _TYPES["duckdb"],
     "snowflake": {
         "text": "VARCHAR",
         "int": "NUMBER",
@@ -108,7 +121,9 @@ def render(table: Table, dialect: Dialect) -> str:
 def render_indexes(table: Table, dialect: Dialect) -> list[str]:
     # Snowflake standard tables have no secondary indexes, so indexes are a
     # SQLite-only rendering. The old hand-written DDL used CLUSTER BY on the
-    # Snowflake side instead; the neutral layer does not carry it (D37).
+    # Snowflake side instead; the neutral layer does not carry it (D37). DuckDB
+    # has ART indexes, but they serve point lookups and every rollup is a scan,
+    # so it gets none either.
     if dialect != "sqlite":
         return []
     return [
@@ -161,7 +176,13 @@ def physical_shape(cur: Any, table: Table, dialect: Dialect) -> list[Shape] | No
     key — and Snowflake makes key columns NOT NULL on its own. The key is the
     intent; `declared_shape` applies the same rule.
     """
-    if dialect == "sqlite":
+    if dialect in EMBEDDED:
+        if dialect == "duckdb":
+            # Same PRAGMA, same six columns — but DuckDB raises on an absent
+            # table where SQLite returns no rows.
+            cur.execute(f"SELECT 1 FROM duckdb_tables() WHERE table_name = '{table.name}'")
+            if not cur.fetchall():
+                return None
         cur.execute(f"PRAGMA table_info({table.name})")
         rows = cur.fetchall()
         return [(r[1], r[2].upper(), not r[3] and not r[5], bool(r[5])) for r in rows] or None
@@ -215,16 +236,17 @@ def differences(declared: list[Shape], physical: list[Shape]) -> list[str]:
     return lines
 
 
-def _widen(cur: Any, table: Table, existing: list[str]) -> None:
+def _widen(cur: Any, table: Table, dialect: Dialect, existing: list[str]) -> None:
     # SQLite's ADD COLUMN cannot add a NOT NULL column without a default, so this
     # is the route its own documentation prescribes: build the declared table
     # beside the old one, copy the columns they share, swap. It runs inside the
     # version's transaction, so a row that violates a new NOT NULL rolls the whole
     # version back. Indexes go with the dropped table; `_apply_version` recreates
-    # them after this returns.
+    # them after this returns. DuckDB's DDL is transactional too and takes the
+    # same route, so one rebuild serves both embedded dialects.
     tmp = f"{table.name}__migrating"
     cols = ", ".join(existing)
-    cur.execute(render(replace(table, name=tmp), "sqlite"))
+    cur.execute(render(replace(table, name=tmp), dialect))
     cur.execute(f"INSERT INTO {tmp} ({cols}) SELECT {cols} FROM {table.name}")
     cur.execute(f"DROP TABLE {table.name}")
     cur.execute(f"ALTER TABLE {tmp} RENAME TO {table.name}")
@@ -256,8 +278,8 @@ def _reconcile(cur: Any, table: Table, dialect: Dialect, version: str) -> None:
     column is as declared and merely lacks some is widened: that is the one
     change a later migration routinely needs (this system declares whole tables,
     not diffs) and it is lossless, since each existing value lands in a column of
-    the same name and type. SQLite rebuilds the table (`_widen`); Snowflake adds
-    the columns with ALTER TABLE, and only when all of them are nullable
+    the same name and type. SQLite and DuckDB rebuild the table (`_widen`);
+    Snowflake adds the columns with ALTER TABLE, and only when all of them are nullable
     (`_add_columns`). Everything else — a type, key or nullability that differs,
     a column the declaration does not have, a NOT NULL column to add on
     Snowflake — means the data needs a person, and is raised: the operator brings
@@ -270,8 +292,8 @@ def _reconcile(cur: Any, table: Table, dialect: Dialect, version: str) -> None:
     want = {s[0]: s for s in declared}
     if all(want.get(s[0]) == s for s in physical):
         have = {s[0] for s in physical}
-        if dialect == "sqlite":
-            _widen(cur, table, [s[0] for s in physical])
+        if dialect in EMBEDDED:
+            _widen(cur, table, dialect, [s[0] for s in physical])
         else:
             missing = [c for c in table.columns if _ident(c[0], dialect) not in have]
             _add_columns(cur, table, missing)
@@ -302,8 +324,8 @@ def _record(cur: Any, version: str) -> None:
 
 
 def _apply_version(conn: Any, cur: Any, migration: ModuleType, dialect: Dialect) -> None:
-    # SQLite runs DDL inside a transaction, so one BEGIN makes the version
-    # all-or-nothing, the version row included. Snowflake commits every DDL
+    # SQLite and DuckDB run DDL inside a transaction, so one BEGIN makes the
+    # version all-or-nothing, the version row included. Snowflake commits every DDL
     # statement on its own (and the connector autocommits DML by default), so
     # nothing here is atomic there: a failure leaves the tables created so far in
     # place and the version unrecorded. That is survivable — every CREATE is IF
@@ -311,7 +333,7 @@ def _apply_version(conn: Any, cur: Any, migration: ModuleType, dialect: Dialect)
     # the operator is told exactly what was left behind rather than promised a
     # rollback that did not happen.
     tables = migration.TABLES
-    if dialect == "sqlite":
+    if dialect in EMBEDDED:
         cur.execute("BEGIN")
     else:
         present = {t.name for t in tables if physical_shape(cur, t, dialect) is not None}
@@ -349,9 +371,11 @@ def apply(conn: Any, dialect: Dialect) -> list[str]:
     recorded only after every table it declares has been read back and matches
     (`_reconcile`), so a table that pre-dates versioning cannot be passed off as
     migrated by an `IF NOT EXISTS` no-op. Idempotent: a second call finds every
-    version recorded and executes nothing. `conn` is a `sqlite3.Connection` or a
-    Snowflake connection — both expose `cursor()`, `commit()` and `rollback()`,
-    and their cursors `execute`/`fetchall` with the same shape.
+    version recorded and executes nothing. `conn` is a `sqlite3.Connection`, a
+    `duckdb_store.MigratableConnection` or a Snowflake connection — each exposes
+    `cursor()`, `commit()` and `rollback()`, and its cursor `execute`/`fetchall`
+    with the same shape and inside the connection's transaction. DuckDB's own
+    `cursor()` is a second connection, which is what the wrapper is for.
     """
     cur = conn.cursor()
     try:

@@ -174,6 +174,12 @@ class Settings:
         default_factory=lambda: _env_int("EPISODE_DEDUP_WINDOW_MINUTES", 30)
     )
 
+    # T4. DuckDB is the warehouse-grade ledger that needs no account: an embedded
+    # file like SQLite, with the SQL `sql/02_rollups.sql` is written in.
+    duckdb_path: str = field(
+        default_factory=lambda: _env("DUCKDB_PATH", "data/ledger.duckdb")
+    )
+
     @property
     def active_model(self) -> str:
         """The model actually serving inference, whichever provider is selected."""
@@ -254,6 +260,10 @@ def make_ledger_store():
         from app.telemetry.snowflake_store import SnowflakeLedgerStore
 
         return SnowflakeLedgerStore()
+    if s.ledger_provider == "duckdb":
+        from app.telemetry.duckdb_store import DuckDBLedgerStore
+
+        return DuckDBLedgerStore(s.duckdb_path)
     from app.telemetry.sqlite_store import SqliteLedgerStore
 
     return SqliteLedgerStore(s.sqlite_path)

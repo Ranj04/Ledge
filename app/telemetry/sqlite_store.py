@@ -3,10 +3,12 @@
 Same four tables as `SnowflakeLedgerStore`, same column names in the same order:
 both stores create their schema through `app/telemetry/migrate.py` from the one
 declaration in `migrations/`, and
-`tests/test_migrations.py::test_both_dialects_declare_the_same_columns_in_the_same_order`
-asserts the two renderings agree — so a query written against one reads against
-the other. This is the store the demo runs on; `SnowflakeLedgerStore` is the same
-interface against the real warehouse.
+`tests/test_migrations.py::test_every_dialect_declares_the_same_columns_in_the_same_order`
+asserts the renderings agree — so a query written against one reads against
+the other. This is the store the demo runs on; `DuckDBLedgerStore` is the same
+interface on a warehouse-grade engine that needs no account, and
+`tests/test_duckdb_store.py` holds the two to the same numbers on the same rows;
+`SnowflakeLedgerStore` is the same interface against the real warehouse.
 
 Writes go through a thread so an fsync never lands in the request path.
 `execute` is the one-statement surface `app/telemetry/lifecycle.py` runs on.
