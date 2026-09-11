@@ -90,13 +90,20 @@ CORTEX_PROVIDER=openai .venv/bin/python scripts/experiment.py --runs 4
   prompt size   naive 28,425 tok   tiered 28,530 tok   (same content, different layout)
 ```
 
-Machine-readable runs: [`results/`](results/).
+**Live — real OpenAI, `gpt-5.6-terra`, measured 2026-08-07.** The figures above come from live OpenAI responses.
+The 42.9% mean reduction, the 47.9% `tiered` hit rate and the 0.0% `naive` hit rate in that headline
+block were read off `usage.prompt_tokens_details` in real API responses. The JSON artifact of that run
+was not retained (`BLOCKERS.md`, "No live `results/*.json` artifact exists"), and there is no
+`OPENAI_API_KEY` on the build machine to re-run it.
+
+Machine-readable runs: [`results/`](results/) — simulator runs only; the 2026-08-07 live run is not
+among them.
 
 ### What the provenance delimiter did to the numbers (simulator, 2026-09-10)
 
 Stage 2 changed the text sent to the model: every memory now renders as a
 `<memory id type origin>` element instead of a `- ` bullet (`DECISIONS.md` D41). The live
-**42.9%** above was measured on **2026-08-07** against the bullet format and has **not** been
+**42.9%** headline was measured on **2026-08-07** against the bullet format and has **not** been
 re-measured live — there is no `OPENAI_API_KEY` on the build machine. The simulator was run
 against both formats on the same corpus and the same scripted conversations, 3 × 4 runs each;
 the provenance delimiter is the only difference between the two columns.
@@ -123,9 +130,10 @@ moved in the opposite direction from the truth.
 
 **The hit rate is measured against the whole prompt.** `cache_hit_rate` is `cached_tokens / input_tokens`, and `input_tokens` is the *total* prompt — cached, written, and the current turn, which can never be cached. Dividing by the cacheable region instead would produce a larger number; this is the conservative framing and `/api/chat` and the session totals use it identically.
 
-**The baseline is not denied anything.** Caching on this provider is implicit and on by default, so
-`naive` has it too — and still measures **0.0%**, because memories retrieved per turn sit at the
-front of the prompt and change every turn. The same memories ordered stable-first cache 47.9%.
+**The baseline is not denied anything.** Caching on OpenAI is implicit and on by default, so `naive`
+had it too in the 2026-08-07 live run — and still measured **0.0%**, because memories retrieved per
+turn sit at the front of the prompt and change every turn. The same memories ordered stable-first
+cached 47.9% in that run.
 
 The headline is **input-side** cost, the only side caching can touch. Total cost is reported next to
 it and is lower: output tokens are the same work in both modes and dilute the percentage. Against a
@@ -136,9 +144,20 @@ into a caching number would be measuring sampling noise.
 
 ## Why the numbers are real
 
-The figures above come from live OpenAI responses. `cached_tokens` is read off
-`usage.prompt_tokens_details` on every call and is always **derived** — from the API response, or
-from the prefix computation when running offline. No code path assigns it.
+Two kinds of measurement appear in this document, and each carries its own provenance:
+
+- **The headline — 42.9% mean input-side reduction, 47.9% `tiered` hit rate, 0.0% `naive`.**
+  **Live.** Measured against real OpenAI responses (`gpt-5.6-terra`) on **2026-08-07**. The JSON
+  artifact of that run was not retained (`BLOCKERS.md`, "No live `results/*.json` artifact exists"),
+  and there is no `OPENAI_API_KEY` on the build machine to reproduce it.
+- **The Stage 1 vs Stage 2 comparison table** ("What the provenance delimiter did to the numbers").
+  **Simulator.** Both columns come from `CORTEX_PROVIDER=sim` runs on 2026-09-10, both committed —
+  `results/2026-09-10-simulator.json` and `results/2026-09-10-simulator-stage2.json` — and neither
+  is a live measurement.
+
+In both cases `cached_tokens` is **derived**, never assigned: on a live call it is read off
+`usage.prompt_tokens_details` in the API response; offline it comes from the simulator's prefix
+computation. No code path assigns it.
 
 Every external dependency sits behind a `Protocol` in `app/contracts.py` with a real client and a
 simulator, switched by one environment variable. That was built because we had no sponsor
@@ -164,10 +183,12 @@ numbers with no error anywhere:
 **What is simulated:** with `CORTEX_PROVIDER=sim`, the model's replies and therefore the ablation
 verdicts — see `DECISIONS.md` D10. The UI shows the provider state on screen at all times.
 
-**What is not measured:** cache *write* tokens. The API reports reads and not writes, so
-`cache_write_tokens` is reported as zero rather than guessed. Writes bill at 1.25× and land on
-tokens *not* served from cache — which is the naive baseline, at 0.0% cached. Counting them would
-widen the gap, so every figure here is a floor (`BLOCKERS.md`).
+**What is not measured on the live path:** cache *write* tokens. The OpenAI API reports reads and
+not writes, so `app/cortex/openai_client.py` reports `cache_write_tokens` as zero rather than
+guessing. Writes bill at 1.25× and land on tokens *not* served from cache — which is the naive
+baseline, at 0.0% cached. Counting them would widen the gap, so the 2026-08-07 live 42.9% is a floor
+(`BLOCKERS.md`). The simulator does derive write tokens (`app/cortex/cache_sim.py`) and prices them
+at the write rate, so the Stage 1 / Stage 2 simulator table already includes them.
 
 ## Is the baseline fair?
 
