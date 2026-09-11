@@ -141,7 +141,7 @@ class SnowflakeLedgerStore:
         """
 
         def go():
-            # VERIFY-AT-EVENT: has never run against a real account (the connector
+            # VERIFY-WITH-CREDENTIALS: has never run against a real account (the connector
             # is not installed here). The connector autocommits DML, so each
             # statement is its own transaction, and Snowflake serialises DML on a
             # table. A real run must confirm (1) `cursor.rowcount` on a MERGE is
@@ -173,7 +173,7 @@ class SnowflakeLedgerStore:
                     cur.execute(f"CREATE DATABASE IF NOT EXISTS {db}")
                     cur.execute(f"CREATE SCHEMA IF NOT EXISTS {db}.{schema}")
                     cur.execute(f"USE SCHEMA {db}.{schema}")
-                # VERIFY-AT-EVENT: `migrate.apply` has only ever run against SQLite.
+                # VERIFY-WITH-CREDENTIALS: `migrate.apply` has only ever run against SQLite.
                 # A real run must confirm (1) SCHEMA_MIGRATIONS gains one row for
                 # 0001_initial and a restart adds none, and (2) DESC TABLE CALL_LOG
                 # shows TIER_TOKENS as VARCHAR. The 2026-08-07 tables were created
@@ -260,7 +260,7 @@ class SnowflakeLedgerStore:
         # The window starts where the other two stores' does — one Python
         # computation bound as the ISO-Z text this store's inserts already bind
         # — rather than a DATEADD the warehouse would evaluate on its own (D45).
-        # VERIFY-AT-EVENT: `TO_TIMESTAMP_NTZ(%s)` in a WHERE against a TIMESTAMP_NTZ
+        # VERIFY-WITH-CREDENTIALS: `TO_TIMESTAMP_NTZ(%s)` in a WHERE against a TIMESTAMP_NTZ
         # column, bound with the same ISO-Z string the inserts use; never run.
         sql = """
             SELECT i.MEMORY_ID, i.USER_ID, i.MEMORY_TYPE, MAX(i.TIER) AS TIER,

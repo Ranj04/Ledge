@@ -1,3 +1,5 @@
+> **2026-09-10.** The event this script was written for has taken place. The file is retained unedited as a record of how the demo was prepared; what the repository is now is in the root `README.md`.
+
 # Demo — 3 minutes
 
 **Before you start:** server running, ledger populated, ablation run, browser tab **focused**

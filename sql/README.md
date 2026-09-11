@@ -41,4 +41,4 @@ parse). Or start the service with `LEDGER_PROVIDER=snowflake`; `init_schema` app
 migrations. The event has passed with no Cortex entitlement on the trial account (D28), so the
 migrator, the D38 verification, the lifecycle `MERGE`s and the views as now written have never
 run against a real account; the 2026-08-07 session exercised the earlier hand-written DDL and
-inserts only. Each unverified line carries `VERIFY-AT-EVENT`.
+inserts only. Each unverified line carries `VERIFY-WITH-CREDENTIALS`.

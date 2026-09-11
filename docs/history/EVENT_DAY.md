@@ -1,3 +1,5 @@
+> **2026-09-10.** The event this checklist was written for has taken place. The file is retained unedited as a record of how the demo was prepared; the current run path is the root `README.md`.
+
 # Event day
 
 **You have not slept. Do these in order.**

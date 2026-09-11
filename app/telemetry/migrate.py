@@ -187,7 +187,7 @@ def physical_shape(cur: Any, table: Table, dialect: Dialect) -> list[Shape] | No
         rows = cur.fetchall()
         return [(r[1], r[2].upper(), not r[3] and not r[5], bool(r[5])) for r in rows] or None
     name = _ident(table.name, dialect)
-    # VERIFY-AT-EVENT: has never run against a real account. A real run must
+    # VERIFY-WITH-CREDENTIALS: has never run against a real account. A real run must
     # confirm (1) SHOW TABLES LIKE returns no rows for an absent table, (2) DESC
     # TABLE's result set carries columns headed `name`, `type`, `null?` and
     # `primary key` with Y/N values, and (3) STRING, NUMBER, FLOAT, TIMESTAMP_NTZ
@@ -258,7 +258,7 @@ def _add_columns(cur: Any, table: Table, missing: list[Column]) -> None:
     # nullable columns is added, one ALTER each, in declaration order. They land
     # at the end of the table, which is where a later migration declares them;
     # anything else fails the order check in `_reconcile` and is raised.
-    # VERIFY-AT-EVENT: has never run against a real account. A real run must
+    # VERIFY-WITH-CREDENTIALS: has never run against a real account. A real run must
     # confirm that DESC TABLE lists an added column last, as NUMBER(38,0) for
     # `int`, and nullable — 0002's PROBES_TESTED is the first case.
     if any(not nullable for _, _, nullable, _ in missing):

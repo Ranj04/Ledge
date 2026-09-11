@@ -109,7 +109,7 @@ def embedding_scorer(embedder: Embedder) -> SimilarityScorer:
         if a == b:
             return 1.0
         va, vb = vectors([a, b])
-        value = _cosine(va, vb)  # VERIFY-AT-EVENT: confirm VECTOR function availability is no longer needed — cosine is taken here on the returned vectors; no VECTOR_COSINE_SIMILARITY call remains.
+        value = _cosine(va, vb)  # VERIFY-WITH-CREDENTIALS: confirm VECTOR function availability is no longer needed — cosine is taken here on the returned vectors; no VECTOR_COSINE_SIMILARITY call remains.
         return max(0.0, min(1.0, value)) if math.isfinite(value) else 0.0
 
     return score
@@ -119,26 +119,26 @@ class SnowflakeEmbedder:
     """One connection for the whole run. Built beside the other clients; `close()` in a `finally`."""
 
     def __init__(self) -> None:
-        import snowflake.connector  # VERIFY-AT-EVENT: connector import/version in event image.
+        import snowflake.connector  # VERIFY-WITH-CREDENTIALS: connector import/version in event image.
 
         settings = get_settings()
-        self.model = os.getenv(  # VERIFY-AT-EVENT: confirm the selected model is enabled in the account.
+        self.model = os.getenv(  # VERIFY-WITH-CREDENTIALS: confirm the selected model is enabled in the account.
             "CORTEX_EMBEDDING_MODEL", "snowflake-arctic-embed-l-v2.0"
         )
-        kwargs = {  # VERIFY-AT-EVENT: confirm account identifier and auth fields in the event account.
+        kwargs = {  # VERIFY-WITH-CREDENTIALS: confirm account identifier and auth fields in the event account.
             "account": settings.snowflake_account,
             "user": settings.snowflake_user,
             "database": settings.snowflake_database,
             "schema": settings.snowflake_schema,
         }
-        if settings.snowflake_warehouse:  # VERIFY-AT-EVENT: Cortex embedding may not require a warehouse.
+        if settings.snowflake_warehouse:  # VERIFY-WITH-CREDENTIALS: Cortex embedding may not require a warehouse.
             kwargs["warehouse"] = settings.snowflake_warehouse
-        if settings.snowflake_role:  # VERIFY-AT-EVENT: role needs Cortex embedding privileges.
+        if settings.snowflake_role:  # VERIFY-WITH-CREDENTIALS: role needs Cortex embedding privileges.
             kwargs["role"] = settings.snowflake_role
-        kwargs["password"] = (  # VERIFY-AT-EVENT: confirm PAT/password authentication mode.
+        kwargs["password"] = (  # VERIFY-WITH-CREDENTIALS: confirm PAT/password authentication mode.
             settings.snowflake_password or settings.snowflake_pat
         )
-        self._conn = snowflake.connector.connect(**kwargs)  # VERIFY-AT-EVENT: exercise real connection.
+        self._conn = snowflake.connector.connect(**kwargs)  # VERIFY-WITH-CREDENTIALS: exercise real connection.
         # Wall-clock seconds of the most recent batch; `ablation/run.py` uses
         # it for the runtime estimate after one warm-up call.
         self.last_batch_seconds: float = 0.0
@@ -147,14 +147,14 @@ class SnowflakeEmbedder:
         # EMBED_TEXT_1024 is scalar — one string in, not an array — so a batch
         # is a VALUES table it runs over: N texts, one round trip.
         placeholders = ", ".join("(%s)" for _ in texts)
-        sql = f"""SELECT SNOWFLAKE.CORTEX.EMBED_TEXT_1024(%s, t.txt) -- VERIFY-AT-EVENT: confirm function signature.
-        FROM (VALUES {placeholders}) AS t(txt)  -- VERIFY-AT-EVENT: confirm function signature accepts a column from VALUES and returns rows in VALUES order; if not, embed one text per statement and keep the per-text cache."""
+        sql = f"""SELECT SNOWFLAKE.CORTEX.EMBED_TEXT_1024(%s, t.txt) -- VERIFY-WITH-CREDENTIALS: confirm function signature.
+        FROM (VALUES {placeholders}) AS t(txt)  -- VERIFY-WITH-CREDENTIALS: confirm function signature accepts a column from VALUES and returns rows in VALUES order; if not, embed one text per statement and keep the per-text cache."""
         started = time.perf_counter()
-        with self._conn.cursor() as cursor:  # VERIFY-AT-EVENT: confirm bound strings work for Cortex functions.
-            cursor.execute(sql, (self.model, *texts))  # VERIFY-AT-EVENT: verify parameter binding.
-            rows = cursor.fetchall()  # VERIFY-AT-EVENT: verify returned vector shape — one row per text, a list of 1024 floats.
+        with self._conn.cursor() as cursor:  # VERIFY-WITH-CREDENTIALS: confirm bound strings work for Cortex functions.
+            cursor.execute(sql, (self.model, *texts))  # VERIFY-WITH-CREDENTIALS: verify parameter binding.
+            rows = cursor.fetchall()  # VERIFY-WITH-CREDENTIALS: verify returned vector shape — one row per text, a list of 1024 floats.
         self.last_batch_seconds = time.perf_counter() - started
-        return [[float(x) for x in row[0]] for row in rows]  # VERIFY-AT-EVENT: confirm vector is first column and non-null.
+        return [[float(x) for x in row[0]] for row in rows]  # VERIFY-WITH-CREDENTIALS: confirm vector is first column and non-null.
 
     def close(self) -> None:
         self._conn.close()

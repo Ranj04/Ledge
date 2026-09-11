@@ -1,12 +1,23 @@
 # Blockers
 
-What could not be verified or completed tonight, what was tried, and what it needs.
+What has not been verified or completed, what was tried, and what it needs. Entries are dated.
+A closed entry keeps its text and gains a dated status line, so what was believed at the time
+stays on the record.
+
+**Standing condition, 2026-09-10.** The event this repository was built for has taken place.
+Every entry below that once said "resolves at the event" now means one thing: the path needs
+Snowflake or EverOS credentials, and nobody has run it with them. Unverified lines in code are
+marked `# VERIFY-WITH-CREDENTIALS:` (renamed from `# VERIFY-AT-EVENT:` on 2026-09-10; the count
+did not change). The ledger backend that *is* exercised end to end without an account is DuckDB —
+`LEDGER_PROVIDER=duckdb`, held to SQLite's numbers by `tests/test_duckdb_store.py` and migrated in
+CI on every push (DECISIONS.md D44).
 
 ---
 
 ## B1 — Real Cortex pricing unknown
 
-**Status:** open, resolves at the event.
+**Status:** open; needs a Snowflake account with a Cortex entitlement, which the trial account does
+not have (D28) — and moot while inference is OpenAI, whose USD rates are what `Pricing` carries.
 
 Snowflake Cortex bills in **credits**, not dollars, and the credit multiplier per model is
 published in the Snowflake service consumption table rather than in the REST API docs. We report
@@ -49,7 +60,7 @@ Messages-path usage block.
 reports **zero** if none are present — which understates our own result rather than inventing one,
 and does not crash.
 
-*First thing to run at the event:* `scripts/verify_cortex.py`. It sends the same ~2,000-token
+*First thing to run with credentials:* `scripts/verify_cortex.py`. It sends the same ~2,000-token
 prefix twice and prints the raw usage block from both calls. If the second call shows a non-zero
 cache-read field, everything downstream works; if the field has a different name, add it to the
 tuples in `_read_usage` — a one-line change.
@@ -58,15 +69,15 @@ tuples in `_read_usage` — a one-line change.
 naive-vs-tiered comparison is about layout and the simulator's numbers are honestly labelled as
 simulated. Say so plainly rather than showing a dead meter.
 
-## B3 — Ablation verdicts tonight measure the harness, not the model
+## B3 — Ablation verdicts without a real model measure the harness, not the model
 
-**Status:** open by design, resolves at the event.
+**Status:** open by design; needs a real model behind the harness, which nobody has run.
 
 The ablation harness replays a call with one memory removed and scores how much the answer
-changed. Tonight the answer comes from `MockCortexClient`'s lexical composer (DECISIONS.md D10),
+changed. Without an API key the answer comes from `MockCortexClient`'s lexical composer (DECISIONS.md D10),
 not from a language model.
 
-*What tonight's run does prove:* that the harness runs, that it scores, that it writes
+*What the offline run does prove:* that the harness runs, that it scores, that it writes
 `ABLATION_RESULTS`, and that it separates a planted junk memory from a planted critical one — i.e.
 that it is not a function that returns "evict" for everything or "keep" for everything.
 
@@ -93,10 +104,11 @@ The short version, worth having ready because it is a good answer rather than an
 
 **What is still true and must still be said:** these verdicts are scored against a lexical stand-in
 for a model. The harness is real, the method is sound, and the two controls come out right in both
-directions — but a lexical composer and Claude do not agree on what is relevant. Tonight proves the
-*harness*; the event proves the *verdicts*.
+directions — but a lexical composer and Claude do not agree on what is relevant. This tree proves the
+*harness*; a run against a real model would prove the *verdicts*, and none has been made.
 
-*To resolve:* `CORTEX_PROVIDER=real .venv/bin/python -m ablation.run --sample 25`. Whatever rate
+*To resolve:* `CORTEX_PROVIDER=openai .venv/bin/python -m ablation.run --sample 25` with an
+`OPENAI_API_KEY` (or `real`, should a Cortex entitlement ever appear). Whatever rate
 that produces is the number to quote.
 
 ## B4 — Vendor-billing reconciliation is open, and manual
@@ -122,6 +134,10 @@ path) means the ledger will read **low**, and by how much is exactly what the co
 
 ## 2026-08-07 — EverOS live path unverified from this session
 
+**Status, 2026-09-10:** overtaken the same day — the probe was run on the laptop and passed
+(`docs/history/EVENT_DAY.md` records 11/11), and the entry two below records what the live path
+then showed. Retained as written; nothing below is a current instruction.
+
 `app/everos/real_client.py` was rewritten against the published v2 reference but has
 **never touched the live API**. Three network paths were tried and all are blocked:
 the cloud sandbox cannot reach api.evermind.ai (403 at the egress proxy), the browser
@@ -140,6 +156,11 @@ stale `.git/index.lock` after each command and `commit` will likely refuse. Run 
 from a normal terminal; if a commit fails on the lock, `rm .git/index.lock` first.
 
 ## 2026-08-07 — `SNOWFLAKE_PAT` is blank: Cortex is unverified
+
+**Status, 2026-09-10:** overtaken the same day — the PAT was created and the credential chain
+verified, and the account then turned out to carry no Cortex entitlement on any surface (two
+entries down; D28). That PAT expired 2026-08-09. Retained as written; the SQL below is not a
+current instruction.
 
 **Status:** blocked on one human action. Everything else is done and waiting.
 
@@ -184,6 +205,10 @@ memory (`DECISIONS.md` D19), so this does not touch the demo path. It is recorde
 real property of the integration and someone will otherwise rediscover it live and be surprised.
 
 ## 2026-08-07 — BLOCKING: the Snowflake trial account has no Cortex entitlement
+
+**Status, 2026-09-10:** closed by the next entry — inference moved to OpenAI. Option 1 below
+(ask on-site) no longer exists: the event has passed. `RealCortexClient` stays written and
+unexercised. Retained as written.
 
 Not a region problem and not a cross-region problem. The account is not permitted to call Cortex
 on **either** surface. Verified directly, both from Snowsight and against the REST endpoint:
@@ -243,7 +268,9 @@ compared against `CALL_LOG`. Not attempted — it is a credibility check, not a 
 
 ## 2026-08-07 — tier 1 is byte-stable but does not cache, and nobody knows why yet
 
-**Status:** open. Not a correctness problem — an unclaimed saving.
+**Status:** open. Not a correctness problem — an unclaimed saving. As of 2026-09-10 nothing defers
+it any more; it needs an `OPENAI_API_KEY` to measure a fix against, and none is on the build
+machine.
 
 The ledger shows tier 0 at an **85%** cache hit rate and tier 1 at **0%**. That should not follow
 from the layout: both blocks are assembled from always-injected memories sorted by `memory_id`, and
@@ -275,7 +302,7 @@ That is a genuine conflict between two things that are each right on their own: 
 retrieved facts out of the conversation history, and giving an implicit prefix matcher an
 append-only transcript. Cortex never surfaced it because there a breakpoint decides what caches.
 
-**Why it is not chased before the event:** the reported reduction is measured with this behaviour
+**Why it was not chased before the event, and is still open:** the reported reduction is measured with this behaviour
 present, so it is a **floor** — fixing it can only move the number up. The fix touches the
 Assembler's message construction, which is the product, on the afternoon of the demo.
 
@@ -288,6 +315,9 @@ time: on this provider it is not a breakpoint, it is just ordering.
 
 **Status:** open. **The demo runs on `LEDGER_PROVIDER=sqlite`.** Rows landing in Snowflake is a
 nice-to-have; the hero cost meter is not.
+
+*2026-09-10:* still open and untouched since. `sqlite` remains the default; `duckdb` is the
+warehouse-grade backend that runs without an account (D44).
 
 `GET /api/session/{id}/summary` hangs indefinitely against the Snowflake ledger — 45s, reproducibly,
 twice in a row, after a five-turn conversation. The chat endpoint itself is fine (streaming, cost,
@@ -313,7 +343,7 @@ of a `--record` sweep running at the same time as dashboard reads.
    infrequent; writes are the hot path that needed the fix.
 3. Revert to per-query connections everywhere and accept slow `--record`.
 
-Not attempted before the event: the demo path is secured on sqlite, and this is the ledger's
+Not attempted before the event, and not since: the demo path is secured on sqlite, and this is the ledger's
 storage backend rather than anything the audience sees. Snowflake still holds a full recorded sweep
 (382 calls, 39,728 injections) and the rollup views read it correctly from Snowsight — that is what
 to show if anyone asks to see the tables.
@@ -340,7 +370,10 @@ wobble and why the reduction is reported input-side. Session ids carry a per-inv
 
 ## 2026-09-10 — The Docker tokenizer pre-warm layer has never been built
 
-**Status:** open. Written to spec, unverified.
+**Status:** closed 2026-09-10. Built from `docker/app.Dockerfile` as `memoryledger:verify`, then run
+with `docker run --network none memoryledger:verify`: the tokenizer loaded in 0.178 s from the baked
+layer, with no network to fetch from. The layer works as written; the rest of this entry is the
+record of why it had to be checked.
 
 `docker/app.Dockerfile` pre-warms the `tiktoken` encoding at image build so the first request does
 not pay a network fetch. Docker CLI 29.4.3 is installed on this machine but the Desktop daemon was
@@ -352,7 +385,9 @@ and hit `/api/status`. If the tokenizer fetch is still on the first request, the
 
 ## 2026-09-10 — The CI workflow has never run
 
-**Status:** open. A workflow that has never run is a claim.
+**Status:** closed 2026-09-10. Pushed; the workflow ran on GitHub and passed on its first run
+(`https://github.com/Ranj04/Ledge/actions/workflows/ci.yml`, run 34558901991, 46 s). The README
+badge reads from that workflow. There is no coverage gate, and the badge claims none.
 
 `.github/workflows/ci.yml` was written from scratch at T0 — the `~/mem` lineage it was meant to be
 ported from does not exist on this machine — and nothing has been pushed since, so GitHub has never
@@ -365,9 +400,18 @@ is what first CI runs cost.
 
 ## 2026-09-10 — The eviction dashboard reports `$0.00/month` even with an `evict` verdict
 
-**Status:** open. **Do not let this be discovered live.** The verdict machinery works; the dollar
-figure behind it is unpopulated, and a reviewer who sees `evict` next to `$0.00` will conclude the
-harness is decorative.
+**Status:** closed 2026-09-10 — by ordering, not by code. On a fresh ledger,
+`python scripts/experiment.py --runs 4 --record` followed by `store.memory_costs()` returns
+**119 rows, all non-zero, $22.61/month projected**; the single most expensive memory is
+`mem_ef6be89e` (profile, tier 1, 168 injections, **$0.9176/mo**) — the planted junk memory, so
+the ledger's costliest row is the one planted as worthless. The dollars scale with how many
+calls the ledger holds: the projection is `cost × 30 / observed_days` with a one-day floor (D44)
+and a sweep is observed for seconds, so the build machine's ledger, which held a sweep and a half
+(252 calls, 36 sessions), projected $33.91/month with the same memory on top at $1.3764/mo. The
+ranking is the finding; the dollar figure is its scale. The record step is now the
+quickstart's step before "open the dashboard" (`README.md`), because `data/ledger.db` is
+gitignored and every clone starts empty. The analysis below stands; it explains why the zero was
+honest.
 
 Measured 2026-09-10, `python -m ablation.run --sample 25` on a fresh sqlite ledger: the verdicts
 come out as recorded in DECISIONS.md D35 (the planted junk memory `evict` at 1.0000, the planted
@@ -382,7 +426,7 @@ that has never recorded a conversation there are no injection rows, so every per
 — the harness will not invent a dollar figure — but it means the demo's "this memory costs $X and
 changes nothing" line has an `X` of zero until the ledger has been fed.
 
-*To resolve before the demo:* populate the ledger first, then run the ablation against it:
+*The step, which the quickstart now includes:* populate the ledger first, then run the ablation against it:
 `python scripts/experiment.py --runs 4 --record` (writes every call to the ledger) followed by
 `python -m ablation.run --sample 25`. The cost column then reflects the recorded sweep and the
 eviction total is a real projection. Any run that shows `$0.00` next to `evict` has skipped this
@@ -390,12 +434,15 @@ step.
 
 ## 2026-09-10 — The memory lifecycle has never run against Snowflake
 
-**Status:** open; written, driven against a fake, unexercised. `LEDGER_PROVIDER=snowflake` now
-reaches every lifecycle operation (`.review/q/1` F2) instead of raising, and the connector is not
+**Status:** open; written, driven against a fake, unexercised — and, with the event past, that is
+the standing state rather than a pending one: it changes only when someone with a Snowflake
+account runs it. The lifecycle *is* exercised end to end on both embedded backends, SQLite and
+DuckDB (`tests/test_duckdb_store.py::test_the_lifecycle_runs_on_duckdb`, D44).
+`LEDGER_PROVIDER=snowflake` reaches every lifecycle operation (`.review/q/1` F2) instead of raising, and the connector is not
 installed in this venv, so nothing on that path has executed.
 
 `app/telemetry/snowflake_store.py :: SnowflakeLedgerStore.execute` carries the
-`# VERIFY-AT-EVENT:` marker (moved from the lifecycle's adapter when T3.1 landed
+`# VERIFY-WITH-CREDENTIALS:` marker (moved from the lifecycle's adapter when T3.1 landed
 `.sol/requests/q2-lifecycle-store-methods.md`). A real run must confirm:
 
 1. `cursor.rowcount` after the `_CLAIM_EPISODE` `MERGE` is 1 for a fresh or expired row and 0
@@ -406,7 +453,7 @@ installed in this venv, so nothing on that path has executed.
    and `WHEN MATCHED AND t.ts <` as it already does in the stores' own inserts.
 3. Migration 0002 creates `MEMORY_LIFECYCLE` and `EPISODE_WRITES` and adds `PROBES_TESTED` to
    `ABLATION_RESULTS` with `ALTER TABLE ... ADD COLUMN` (`migrate._add_columns`, its own
-   `# VERIFY-AT-EVENT:`, never run): `DESC TABLE` must then list the column last, as
+   `# VERIFY-WITH-CREDENTIALS:`, never run): `DESC TABLE` must then list the column last, as
    `NUMBER(38,0)`, nullable, or `apply` refuses 0002 and records nothing (D38, D40). On the
    2026-08-07 trial tables 0001 itself is refused first; see the `init_schema` marker.
 4. Exactly-once under contention across **processes** is Snowflake's table-level DML lock, not
@@ -414,7 +461,7 @@ installed in this venv, so nothing on that path has executed.
 5. (T4 round 2, D45) `memory_costs` now binds its window as `i.TS >= TO_TIMESTAMP_NTZ(%s)`
    with the ISO-Z string `_window_start` produces, instead of `DATEADD(day, -%s, ...)`, so the
    three stores share one definition of `days`. Same binding shape as the inserts and item 2;
-   its own `# VERIFY-AT-EVENT:` in `SnowflakeLedgerStore.memory_costs`, never run.
+   its own `# VERIFY-WITH-CREDENTIALS:` in `SnowflakeLedgerStore.memory_costs`, never run.
 
 *To resolve:* with credentials, `python scripts/lifecycle.py --user stu_maya_chen --propose`,
 then `--confirm`, then two identical chat turns inside a minute and one `EPISODE_WRITES` row, then
@@ -441,7 +488,7 @@ Stated once, plainly, at the end of the build. Each item points at the entry tha
 2. **The Snowflake embedding path has never been exercised.** `ablation/similarity.py ::
    SnowflakeEmbedder` (Q3) calls `SNOWFLAKE.CORTEX.EMBED_TEXT_1024` through the connector, which is not
    installed here — and the trial account carries no Cortex entitlement (D28), so it cannot run
-   there either. Its `# VERIFY-AT-EVENT:` lines (connector import, warehouse, role privileges,
+   there either. Its `# VERIFY-WITH-CREDENTIALS:` lines (connector import, warehouse, role privileges,
    result shape) are untouched. The ablation verdicts in this repo come from the lexical scorer.
 3. **`/ready` has never been verified against a real dependency failure.** It answers 503 when
    `ledger.call_summary()` raises, the tokenizer fails to load, or the EverOS client is absent
@@ -458,3 +505,21 @@ Stated once, plainly, at the end of the build. Each item points at the entry tha
    conversation has none. Run `python scripts/experiment.py --runs 4 --record` before
    `python -m ablation.run --sample 25`, or the demo shows `evict` next to `$0.00`. See "The
    eviction dashboard reports `$0.00/month`" above.
+
+## 2026-09-10 — T5: the event has passed; what that closes and what it does not
+
+Closed today, each with its evidence in its own entry above: the CI workflow (ran on GitHub and
+passed), the Docker tokenizer pre-warm layer (0.178 s under `--network none`), and the `$0.00/month`
+eviction dashboard (119 non-zero rows after the record step, which the quickstart now puts before
+"open the dashboard"). Also closed: `scripts/experiment.py` crashed on Windows with
+`UnicodeEncodeError` — the bar chart is drawn with block characters a redirected cp1252 console
+cannot encode. `main()` now reconfigures stdout to UTF-8; the measurement logic is untouched and the
+`--json` output equals `results/2026-09-10-simulator-stage4.json` in every field but `generated_at`.
+
+Still open, and no longer waiting on a date: no live `results/*.json`; every Snowflake path — B1's
+credit rate, B2's usage field names, the lifecycle `MERGE`s and `migrate._add_columns`,
+`SnowflakeEmbedder`, the session-summary wedge; B3's verdicts against a real model; B4's manual
+reconciliation; tier 1 not caching on the OpenAI path; `/ready` against a real dependency failure.
+The 23 `# VERIFY-WITH-CREDENTIALS:` lines in `.py` files and the one in `sql/02_rollups.sql` name
+the Snowflake, Cortex and EverOS assumptions at the exact line that depends on each. Every one of
+these needs a credential nobody has run it with, and its entry says which.

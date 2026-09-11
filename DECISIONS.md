@@ -1543,3 +1543,54 @@ DuckDB equal at `limit` ∈ {-1, 0, 1, N, 10^12}, `days` ∈ {-1, 0, 1, 30, 10^6
 empty-string filters, with the expected row counts asserted, so the next backend is held to the
 same edges rather than to a happy path. Sol's `tests/review/test_t4_duckdb_adversarial.py`
 passes unmodified.
+
+### D46 — 2026-09-10 — T5: the event has passed, and the repository now speaks to a stranger
+
+**What changed, and what did not.** No measured number moved. `results/*.json`, every test
+assertion, `app/cortex/cache_sim.py`, `app/contracts.py`, the seed corpus and the negative result
+in `app/cortex/openai_client.py` are byte-identical to the T4 merge. What changed is who the
+documents address: the README opened for someone about to present, and now opens for someone who
+found the repository on GitHub and has ninety seconds.
+
+**The marker is renamed for its condition, not its date.** `# VERIFY-AT-EVENT:` becomes
+`# VERIFY-WITH-CREDENTIALS:` in every tracked live file. The text after the colon — the checklist
+of what an unexercised line needs — is untouched. Counted before and after: 23 `# VERIFY-AT-EVENT:`
+comments in `.py` files (12 in `ablation/similarity.py`, 11 under `app/`); 26 mentions of the
+string in `.py` once the two `-- ` SQL-comment forms in `similarity.py` and one bare mention in
+`tests/test_migrations.py` are included; 1 in `sql/02_rollups.sql`; and the same numbers after.
+The T5 brief expected 22 and Appendix A had said 18 — both were counts of earlier trees, and the
+tree, not the brief, is what is reported. The rename reached `ablation/` and `sql/`, which are
+Sol's directories, because the brief's verification requires zero old markers in `.py` and `.sql`
+and a name change inside a comment is exactly the mechanical edit the ownership rule exists to
+keep safe; Sol reviews this task.
+
+**What keeps the old name, on purpose.** `docs/history/`, the prompts, requests and reviews under
+`.sol/`, and every entry in this file before this one still say `VERIFY-AT-EVENT`. They are dated
+records of what was written; rewriting a prompt that was issued with that name would falsify what
+the agent was told, and this file is append-only. A reader who greps for the old name lands in
+history and in D33–D45, and `CLAUDE.md`'s conventions say why.
+
+**`BLOCKERS.md` now distinguishes closed from permanent.** Three entries closed with evidence
+measured on this tree: the CI workflow ran on GitHub and passed on its first run; the Docker
+pre-warm layer loads the tokenizer in 0.178 s under `--network none`; and the eviction dashboard's
+`$0.00/month` is a fresh-clone artefact that the record step fixes — after it, the costliest of
+119 non-zero rows is the planted junk memory `mem_ef6be89e` — $0.9176/mo on a fresh ledger holding
+exactly one `--runs 4` sweep, $1.3764/mo on the build machine's ledger, which held a sweep and a
+half; the projection scales with recorded calls and the ranking does not — which is the thesis on
+real ledger rows. Entries that once said "resolves at the event" now say what is true: they need
+credentials nobody has run them with, and DuckDB is the warehouse-grade backend that is exercised
+instead. The dated 2026-08-07 entries gained a status line and kept their text.
+
+**Two things in the quickstart were broken for a Windows reader and are not any more.** Every
+command said `.venv/bin/python`; the README now states the Windows substitution once and keeps
+the macOS/Linux form, which is correct there. And `scripts/experiment.py --runs 4 --record` — the
+documented step that fills the ledger — crashed with `UnicodeEncodeError`, because a redirected
+Windows console encodes cp1252 and the bar chart is drawn with `█`. `main()` now reconfigures
+`sys.stdout` to UTF-8; the measurement logic is untouched, and the `--json` output of this tree
+equals `results/2026-09-10-simulator-stage4.json` in every field but `generated_at`. The record
+step now comes *before* "open the dashboard", because `data/ledger.db` is gitignored — the ledger
+is generated, not seeded — so every fresh clone starts empty and the old order showed zeros first.
+
+**The CI badge.** Added only because the workflow has now executed and passed. A badge on a
+workflow that had never run would have been the kind of claim this repository exists not to make.
+It says nothing about coverage, because there is no coverage gate.

@@ -20,7 +20,7 @@ are documented in DECISIONS.md; the short version:
   out, so tier 2 — the churning layer the whole Assembler argument rests on —
   would have been empty.
 
-Anything still unverified is marked `# VERIFY-AT-EVENT:`.
+Anything still unverified is marked `# VERIFY-WITH-CREDENTIALS:`.
 """
 
 from __future__ import annotations
@@ -173,7 +173,7 @@ class RealEverOSClient:
             "query": query,
             "user_id": user_id,
             "top_k": limit,
-            # VERIFY-AT-EVENT: "agentic" retrieves better but spends an extra
+            # VERIFY-WITH-CREDENTIALS: "agentic" retrieves better but spends an extra
             # model call per turn, which would land in our own cost ledger and
             # muddy the number the demo rests on. Staying on hybrid.
             "method": "hybrid",

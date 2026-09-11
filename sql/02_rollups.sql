@@ -7,7 +7,7 @@
 -- Everything below is written in the intersection of the two: CASE rather than
 -- IFF, `CURRENT_TIMESTAMP - INTERVAL '30 days'` rather than DATEADD, ::DOUBLE
 -- rather than ::FLOAT (DuckDB's FLOAT is 4 bytes; Snowflake's DOUBLE is FLOAT).
--- VERIFY-AT-EVENT: the Snowflake rendering of those three is checked against its
+-- VERIFY-WITH-CREDENTIALS: the Snowflake rendering of those three is checked against its
 -- documentation only; QUALIFY, COUNT_IF and the window functions are unchanged.
 
 CREATE OR REPLACE VIEW V_MEMORY_MONTHLY_COST AS

@@ -1,4 +1,4 @@
-These are the working documents from the overnight build, retained because the project's claims are traceable through them: they record which measurement produced which number, including the two measurements that were later retracted.
+These are the working documents from the overnight build, retained because the project's claims are traceable through them: they record which measurement produced which number, including the two measurements that were later retracted. The event they were written for has since taken place; nothing here describes the current state of the repository — `README.md` and `BLOCKERS.md` do.
 
 These working documents, and the prompt and review files under `.sol/`, contain the original
 author's local paths (`/Users/ranjivj/...`) and a virtualenv layout from the machine the overnight

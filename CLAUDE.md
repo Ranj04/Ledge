@@ -39,8 +39,9 @@ works, and is one environment variable away.
 
 ## The governing constraint
 
-**No Snowflake or EverOS credentials until the event.** This does not reduce scope — it shapes the
-architecture:
+**No Snowflake or EverOS credentials on the build machine.** The repository was built without
+them, and the paths that need them are marked rather than assumed. This does not reduce scope — it
+shapes the architecture:
 
 > Every external dependency sits behind a `Protocol` in `app/contracts.py` with two
 > implementations — a real client and a simulator. One environment variable switches between them.
@@ -199,8 +200,10 @@ his directories or run git.
 - Dataclasses over Pydantic models for internal shapes; Pydantic only at the HTTP boundary.
 - Async everywhere in the request path. Telemetry writes go through `BackgroundTasks`.
 - Comments explain *why*, not *what*. Density matches the surrounding file.
-- Mark every line you could not verify without credentials with `# VERIFY-AT-EVENT:` and log it in
-  `BLOCKERS.md`.
+- Mark every line you could not verify without credentials with `# VERIFY-WITH-CREDENTIALS:` and
+  log it in `BLOCKERS.md`. The marker names the condition that unblocks verification, not a date;
+  it was `# VERIFY-AT-EVENT:` until 2026-09-10, and the dated records under `docs/history/` and
+  past `DECISIONS.md` entries keep the old name because rewriting them would falsify the record.
 
 ---
 
@@ -235,11 +238,12 @@ Write these as you go, not at the end.
 | File | Contents |
 |---|---|
 | `DECISIONS.md` | Every ambiguous call you made and why. Append-only, dated. |
-| `BLOCKERS.md` | What could not be done tonight, what was tried, what it needs. |
-| `docs/history/HANDOFF.md` | Historical cross-agent requests and interface changes. |
-| `docs/history/EVENT_DAY.md` | Ordered checklist for a tired person: env vars, verification commands, expected output, every `# VERIFY-AT-EVENT:` location. |
-| `docs/history/DEMO.md` | The 3-minute script with timings. |
-| `README.md` | How to run locally in 60 seconds. |
+| `BLOCKERS.md` | What has not been verified, what was tried, what it needs. A closed entry keeps its text and gains a dated status line. |
+| `README.md` | What this is, what was measured, what is simulated, how to run it — written for a stranger. |
+
+`docs/history/` holds dated records that are **not** maintained: `docs/history/EVENT_DAY.md`
+(the go-live checklist), `docs/history/DEMO.md` (the 3-minute script),
+`docs/history/HANDOFF.md` (cross-agent requests) and the build logs. The event they were written for has taken place. Do not edit them.
 
 ---
 
@@ -252,4 +256,5 @@ Write these as you go, not at the end.
 - `scripts/experiment.py` prints a real distribution over N runs.
 - The ablation harness flags the planted junk memory and **not** the planted critical one.
 - Real Snowflake and EverOS clients are written, unexercised, every uncertain line marked.
-- `docs/history/EVENT_DAY.md` tells a tired person exactly what to do in what order.
+- `README.md` tells a stranger what this is, what was measured, what is simulated, and how to run
+  it on macOS, Linux or Windows.

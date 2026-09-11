@@ -54,7 +54,7 @@ def _env_int(key: str, default: int) -> int:
 #     calls in — but see docs/history/EVENT_DAY.md before anyone proposes moving work into
 #     Snowflake.
 #
-# VERIFY-AT-EVENT: confirm the per-model credit rate in the Snowflake service
+# VERIFY-WITH-CREDENTIALS: confirm the per-model credit rate in the Snowflake service
 # consumption table. 2.55 is the published figure for Sonnet-class models; a
 # different deployed model changes it.
 # ---------------------------------------------------------------------------
@@ -204,7 +204,7 @@ class Settings:
     def cortex_base_url(self) -> str:
         if self.cortex_base_url_override:
             return self.cortex_base_url_override
-        # VERIFY-AT-EVENT: exact host form for the account.  Snowflake accepts
+        # VERIFY-WITH-CREDENTIALS: exact host form for the account.  Snowflake accepts
         # https://<account_locator>.<region>.snowflakecomputing.com and also
         # https://<orgname>-<account_name>.snowflakecomputing.com.
         return f"https://{self.snowflake_account}.snowflakecomputing.com/api/v2/cortex"
