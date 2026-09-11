@@ -29,13 +29,18 @@ import json
 import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.contracts import CallRecord, InjectionRecord
 from app.telemetry import migrate
-from app.telemetry.sqlite_store import _cost_per_1k_calls, _project_monthly
+from app.telemetry.sqlite_store import (
+    _cost_per_1k_calls,
+    _project_monthly,
+    _row_limit,
+    _window_start,
+)
 
 ROLLUPS = Path(__file__).resolve().parents[2] / "sql" / "02_rollups.sql"
 
@@ -230,9 +235,7 @@ class DuckDBLedgerStore:
     async def memory_costs(
         self, *, user_id: str | None = None, days: int = 30
     ) -> list[dict[str, Any]]:
-        since = (datetime.now(UTC) - timedelta(days=days)).isoformat().replace(
-            "+00:00", "Z"
-        )
+        since = _window_start(days)
         # The SQLite query groups by memory_id alone and lets the other columns
         # ride along, which DuckDB refuses; naming them changes nothing, since a
         # memory belongs to one user and has one registry row.
@@ -304,7 +307,9 @@ class DuckDBLedgerStore:
 
     async def recent_calls(self, *, limit: int = 50) -> list[dict[str, Any]]:
         rows = await self._run(
-            self._query, "SELECT * FROM call_log ORDER BY ts DESC LIMIT ?", (limit,)
+            self._query,
+            "SELECT * FROM call_log ORDER BY ts DESC LIMIT ?",
+            (_row_limit(limit),),
         )
         for row in rows:
             row["tier_tokens"] = json.loads(row["tier_tokens"] or "{}")

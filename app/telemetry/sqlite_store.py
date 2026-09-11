@@ -142,9 +142,7 @@ class SqliteLedgerStore:
     async def memory_costs(
         self, *, user_id: str | None = None, days: int = 30
     ) -> list[dict[str, Any]]:
-        since = (datetime.now(UTC) - timedelta(days=days)).isoformat().replace(
-            "+00:00", "Z"
-        )
+        since = _window_start(days)
 
         def go():
             with self._connect() as conn:
@@ -222,7 +220,7 @@ class SqliteLedgerStore:
         def go():
             with self._connect() as conn:
                 rows = conn.execute(
-                    "SELECT * FROM call_log ORDER BY ts DESC LIMIT ?", (limit,)
+                    "SELECT * FROM call_log ORDER BY ts DESC LIMIT ?", (_row_limit(limit),)
                 ).fetchall()
                 return [dict(r) for r in rows]
 
@@ -284,6 +282,34 @@ class SqliteLedgerStore:
                 return [dict(r) for r in rows]
 
         return await self._run(go)
+
+
+def _row_limit(limit: int) -> int:
+    """`recent_calls(limit=...)`, decided once for every backend (D45).
+
+    "At most `limit` rows": below zero admits none. Clamped here, in Python,
+    because the three dialects disagree on what a negative LIMIT is — SQLite
+    reads -1 as unlimited, DuckDB and Snowflake reject it — and the route hands
+    the query parameter through unconstrained. There is no spelling for
+    unlimited: a dashboard page never wants the whole ledger.
+    """
+    return max(limit, 0)
+
+
+def _window_start(days: int) -> str:
+    """The ISO-Z instant `days` before now: the `memory_costs` window, decided
+    once for every backend (D45).
+
+    Below zero the window starts in the future and admits nothing; longer than
+    the calendar it starts at year 1 and admits everything. Computed here and
+    bound as text rather than as `DATEADD(day, -%s, ...)` on the warehouse, so
+    Snowflake is not a third opinion on what an out-of-range `days` means.
+    """
+    try:
+        since = datetime.now(UTC) - timedelta(days=max(days, 0))
+    except OverflowError:
+        since = datetime.min.replace(tzinfo=UTC)
+    return since.isoformat().replace("+00:00", "Z")
 
 
 def _cost_per_1k_calls(cost: float, injections: int) -> float:

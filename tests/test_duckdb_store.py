@@ -156,6 +156,45 @@ async def test_the_two_embedded_ledgers_agree_on_every_dashboard_query(tmp_path)
     assert row["ts"] == max(c.ts for c, _ in data["calls"])
 
 
+async def test_the_two_embedded_ledgers_agree_at_the_edges_of_every_caller_number(tmp_path):
+    """The dashboard routes pass `limit` and `days` through unconstrained, and
+    a contract that holds only for well-formed input is not the one the
+    dashboard depends on. Sol's round-1 test walked through exactly this hole:
+    SQLite read `LIMIT -1` as unlimited, DuckDB refused it, and the parity test
+    above had only ever asked for 5. D45 decides both numbers once; this holds
+    every backend that can run to it, at every edge.
+    """
+    sqlite, duck, data = await _both(tmp_path)
+    n = len(data["calls"])
+
+    # limit: at most N rows, below zero admits none, no spelling for unlimited.
+    for limit, expect in ((-1, 0), (0, 0), (1, 1), (n, n), (10**12, n)):
+        a, b = await sqlite.recent_calls(limit=limit), await duck.recent_calls(limit=limit)
+        _same(a, b, f"recent_calls(limit={limit})")
+        assert len(a) == expect, (limit, len(a))
+
+    # days: below zero admits nothing, longer than the calendar admits everything
+    # — including the values that overflow `timedelta` or `datetime` (D45).
+    every = len(data["registry"])
+    for days, expect in ((-1, 0), (0, 0), (1, None), (30, every), (10**6, every), (10**12, every)):
+        a, b = await sqlite.memory_costs(days=days), await duck.memory_costs(days=days)
+        _same(_by(a, "memory_id"), _by(b, "memory_id"), f"memory_costs(days={days})")
+        if expect is not None:
+            assert len(a) == expect, (days, len(a))
+
+    # The string filters: an empty string is a user nobody is, not "no filter".
+    for kwargs in ({"user_id": ""}, {"user_id": USER}, {"user_id": None}):
+        a, b = await sqlite.memory_costs(**kwargs), await duck.memory_costs(**kwargs)
+        _same(_by(a, "memory_id"), _by(b, "memory_id"), f"memory_costs{kwargs}")
+    assert await duck.memory_costs(user_id="") == []
+    for kwargs in (
+        {"session_id": ""}, {"user_id": ""}, {"session_id": "sess_naive", "user_id": ""}
+    ):
+        a, b = await sqlite.call_summary(**kwargs), await duck.call_summary(**kwargs)
+        _same(a, b, f"call_summary{kwargs}")
+        assert a["total_calls"] == 0
+
+
 # ---------------------------------------------------------------------------
 # The rollup views, read back from DuckDB against the store's own queries
 # ---------------------------------------------------------------------------

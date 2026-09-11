@@ -411,6 +411,10 @@ installed in this venv, so nothing on that path has executed.
    2026-08-07 trial tables 0001 itself is refused first; see the `init_schema` marker.
 4. Exactly-once under contention across **processes** is Snowflake's table-level DML lock, not
    this code; within one process the store's shared connection serialises it. Not measured.
+5. (T4 round 2, D45) `memory_costs` now binds its window as `i.TS >= TO_TIMESTAMP_NTZ(%s)`
+   with the ISO-Z string `_window_start` produces, instead of `DATEADD(day, -%s, ...)`, so the
+   three stores share one definition of `days`. Same binding shape as the inserts and item 2;
+   its own `# VERIFY-AT-EVENT:` in `SnowflakeLedgerStore.memory_costs`, never run.
 
 *To resolve:* with credentials, `python scripts/lifecycle.py --user stu_maya_chen --propose`,
 then `--confirm`, then two identical chat turns inside a minute and one `EPISODE_WRITES` row, then

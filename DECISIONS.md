@@ -1482,3 +1482,64 @@ with two ablation rows per target, older verdict first: `evict`→`keep` is abse
 that migrates a fresh file through `scripts/migrate.py --dialect duckdb` twice — the second
 run must apply nothing. `actions/checkout@v5`, `setup-python@v6`, `setup-node@v5` (the Node 20
 deprecation warning).
+
+**Why fractional days is the right definition, not merely the store's** (added T4 round 2;
+Sol reached the same judgement independently in `.review/t4/1`). This changed a published cost
+number, so it should not rest on "the dashboard already did it that way". A monthly projection
+scales an observed cost by `30 / observed_days`, and `observed_days` is supposed to measure
+*how long the memory has been costing money*. `DATEDIFF('day', MIN, MAX) + 1` counts calendar
+dates crossed, so a memory seen at 23:59 and again at 00:01 has "2 observed days" and one seen
+at 00:01 and 23:59 has "1": the figure jumps at midnight without any increase in observed
+duration, and two memories with the same two-minute span project to costs 2x apart depending on
+the clock. Fractional elapsed time (`DATEDIFF('microsecond') / 86400000000.0`) is monotone in
+the duration actually observed and has no such discontinuity. The one-day floor is what makes
+the single-row and sub-day cases finite: a memory seen once has a zero span, and "cost × 30 /
+0" is not a projection. And because every ledger timestamp is UTC (`_iso`, `TO_TIMESTAMP_NTZ`
+on an NTZ column), there is no DST transition on which a 25- or 23-hour calendar day could
+make the two definitions differ for a reason that is not the midnight artefact.
+
+### D45 — 2026-09-10 — T4 round 2: a caller-supplied number means one thing on every ledger backend
+
+**The finding (Sol, `.review/t4/1` F1, MAJOR, with a failing test).** `GET
+/api/ledger/calls?limit=-1` was a 200 on SQLite and a 500 on DuckDB. The route declares
+`limit: int` unconstrained, SQLite reads `LIMIT -1` as "unlimited", DuckDB raises
+`BinderException: LIMIT/OFFSET cannot be negative`, and Snowflake rejects a negative LIMIT too.
+`test_the_two_embedded_ledgers_agree_on_every_dashboard_query` asserted parity and passed,
+because it only ever asked for `limit=5`. A parity that holds for well-formed input is not the
+parity the dashboard depends on.
+
+**The contract, decided once.** Normalise, not 4xx — Sol's test asserts both stores *return*
+`[]` for `-1`, and the contract belongs at the store, because the store is the thing three
+backends implement; the route stays an unconstrained `int` so there is one rule, not a route
+rule and a store rule that can drift. Written into `contracts.LedgerStore`, enforced by two
+helpers in `sqlite_store.py` next to `_project_monthly` (already the shared-math home the other
+two stores import from):
+
+- **`limit`** is "at most N rows". Below zero admits none. There is no spelling for
+  "unlimited": a dashboard page never wants the whole ledger, and SQLite's `-1` was a private
+  dialect, not a feature anyone used. `_row_limit` clamps before any SQL is built, so every
+  dialect sees a non-negative integer. Not special-cased to DuckDB; SQLite and Snowflake clamp
+  identically.
+- **`days`** is "the window reaching back N days from now". Below zero the window starts in the
+  future and admits nothing; longer than the calendar it starts at year 1 and admits everything.
+  This was the *second* method with the same class of divergence, found by asking the question
+  Sol's finding poses: the two embedded stores computed the window in Python and raised
+  `OverflowError` (a 500) past ~739,600 days or past `timedelta`'s 999,999,999-day ceiling,
+  while Snowflake evaluated `DATEADD(day, -%s, CURRENT_TIMESTAMP())` on the warehouse and had an
+  opinion of its own about the same value. `_window_start` computes the instant once and every
+  store binds it as the ISO-Z text it already writes; Snowflake's query now reads
+  `i.TS >= TO_TIMESTAMP_NTZ(%s)`, the binding shape its inserts and the lifecycle `MERGE`s use
+  (`# VERIFY-AT-EVENT:`, BLOCKERS.md item 5).
+
+**Checked and found not to diverge.** `user_id` and `session_id` are bound, never interpolated,
+and every store filters with `(? IS NULL OR col = ?)`: `None` means no filter, `""` means a user
+nobody is, on all three. `DuckDBLedgerStore.view(name)` interpolates its argument, but it is
+DuckDB-only, reached from tests alone, and takes no HTTP input; not a parity question.
+`execute(sql, params)` is the lifecycle's surface, not a caller's.
+
+**The test now covers the edges, not the fix.**
+`test_the_two_embedded_ledgers_agree_at_the_edges_of_every_caller_number` holds SQLite and
+DuckDB equal at `limit` ∈ {-1, 0, 1, N, 10^12}, `days` ∈ {-1, 0, 1, 30, 10^6, 10^12}, and the
+empty-string filters, with the expected row counts asserted, so the next backend is held to the
+same edges rather than to a happy path. Sol's `tests/review/test_t4_duckdb_adversarial.py`
+passes unmodified.
