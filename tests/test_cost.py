@@ -168,14 +168,18 @@ def test_the_call_record_carries_the_fields_the_ledger_needs():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BLOCKERS.md, 'tier 1 is byte-stable but does not cache': attribution "
-    "compares the provider's exact count against the app's cl100k cumulative with "
-    "a strict >=, so a count a few tokens short marks a whole tier uncached. "
-    "The fix is in app/contracts.py::tier_was_cached and _rate_for_region above, "
-    "and both are outside the tier-1 investigation's remit; un-xfail with it.",
-)
+def live_prompt() -> AssembledPrompt:
+    """The 2026-08-07 layout: tier 0 through 1114, tier 1 through 2275, one
+    profile memory to attribute."""
+    return AssembledPrompt(
+        system_blocks=[],
+        messages=[],
+        mode="tiered",
+        injected=[InjectedMemory("m_profile", "profile", 1, 40, 1)],
+        tier_cumulative_tokens={0: 1114, 1: 2275},
+    )
+
+
 def test_a_provider_count_a_few_tokens_short_of_the_boundary_still_attributes_the_tier():
     """Recorded live, 2026-08-07: `cached_tokens` = 2268 against a system
     message the app counted as 2275 tokens through the end of tier 1 (its
@@ -185,15 +189,61 @@ def test_a_provider_count_a_few_tokens_short_of_the_boundary_still_attributes_th
     for a 7-token shortfall at the boundary.  Tier 0 was credited, so the
     dashboard read 85% / 0%.  Whatever the fix, the two figures below must
     come out as one cached tier, not zero."""
-    prompt = AssembledPrompt(
-        system_blocks=[],
-        messages=[],
-        mode="tiered",
-        injected=[InjectedMemory("m_profile", "profile", 1, 40, 1)],
-        tier_cumulative_tokens={0: 1114, 1: 2275},
-    )
+    prompt = live_prompt()
     live = usage(input_tokens=3191, cached_tokens=2268)
     assert prompt.tier_was_cached(1, live.cached_tokens)
     _, injections = build_records(prompt, live, session_id="s", user_id="u", latency_ms=0.0,
                                   pricing=P)
     assert injections[0].was_cached
+
+
+def test_a_credit_on_slack_is_recorded_and_logged(caplog):
+    """Ranjiv's call was "credit the tier, flag the gap" (D49).  A tolerance
+    nobody can see is how a real regression hides, so the shortfall goes on
+    the record and into the log with the numbers in it."""
+    live = usage(input_tokens=3191, cached_tokens=2268)
+    with caplog.at_level("INFO", logger="memoryledger"):
+        call, _ = build_records(live_prompt(), live, session_id="s", user_id="u",
+                                latency_ms=0.0, pricing=P, call_id="call_live")
+    assert call.boundary_slack == {1: 7}
+    line = next(r for r in caplog.records if "credited on boundary slack" in r.getMessage())
+    assert "provider 2268, boundary 2275, shortfall 7" in line.getMessage()
+    assert line.call_id == "call_live"
+
+
+def test_an_outright_hit_records_no_slack():
+    exact = usage(input_tokens=3191, cached_tokens=2275)
+    call, injections = build_records(live_prompt(), exact, session_id="s", user_id="u",
+                                     latency_ms=0.0, pricing=P)
+    assert injections[0].was_cached
+    assert call.boundary_slack == {}
+
+
+def test_a_tier_genuinely_short_of_the_boundary_is_still_not_credited():
+    """The tolerance must not swallow a real miss.  A tier-1 invalidation
+    leaves the provider's count at the tier-0 boundary, 1,161 tokens short;
+    and 100 tokens short (4.4%) is well past the measured divergence, whatever
+    caused it.  Both stay uncached, at full price, with nothing recorded."""
+    prompt = live_prompt()
+    for cached in (1114, 2275 - 100):
+        u = usage(input_tokens=3191, cached_tokens=cached)
+        assert prompt.tier_was_cached(0, cached)
+        assert not prompt.tier_was_cached(1, cached)
+        call, injections = build_records(prompt, u, session_id="s", user_id="u",
+                                         latency_ms=0.0, pricing=P)
+        assert not injections[0].was_cached
+        assert injections[0].attributed_cost_usd == pytest.approx(40 * 3.00 / 1e6)
+        assert 1 not in call.boundary_slack
+
+
+def test_the_slack_scales_with_the_boundary_not_with_a_fixed_token_count():
+    """The divergence between the two tokenizers is proportional to the
+    prefix length (2% is the measured worst case with headroom, see
+    BOUNDARY_SLACK), so a short boundary tolerates fewer tokens than a long
+    one, and a boundary too short to cache at all tolerates almost none."""
+    p = AssembledPrompt(system_blocks=[], messages=[], mode="tiered",
+                        tier_cumulative_tokens={0: 200, 1: 5000})
+    assert p.tier_was_cached(1, 4900) and not p.tier_was_cached(1, 4899)
+    assert p.tier_was_cached(0, 196) and not p.tier_was_cached(0, 195)
+    assert p.boundary_shortfall(1, 4900) == 100
+    assert p.boundary_shortfall(1, 5000) == 0 and p.boundary_shortfall(3, 0) == 0

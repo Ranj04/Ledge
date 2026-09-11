@@ -114,9 +114,57 @@ class AssembledPrompt:
         return sum(self.tier_tokens.values()) + self.overhead_tokens
 
     def tier_was_cached(self, tier: Tier, cached_tokens: int) -> bool:
-        """A tier was served from cache only if the whole prefix through it was."""
+        """A tier was served from cache only if the whole prefix through it
+        was -- to within BOUNDARY_SLACK of the app's own count, because the
+        provider counts in its own tokenizer and the app in cl100k_base.
+        `boundary_shortfall` says how much of that slack a credit used."""
         end = self.tier_cumulative_tokens.get(tier)
-        return end is not None and cached_tokens >= end
+        return end is not None and cached_tokens >= end - int(end * BOUNDARY_SLACK)
+
+    def boundary_shortfall(self, tier: Tier, cached_tokens: int) -> int:
+        """Tokens by which `cached_tokens` fell short of this tier's boundary;
+        zero when the boundary was reached outright.  For a tier that
+        `tier_was_cached` credited, this is the slack the credit relied on."""
+        end = self.tier_cumulative_tokens.get(tier)
+        return max(0, end - cached_tokens) if end is not None else 0
+
+
+# How far short of a tier boundary the provider's `cached_tokens` may fall and
+# still credit the tier, as a fraction of the boundary.
+#
+# The app counts in cl100k_base; the provider reports in its own tokenizer.  A
+# whole-system-message hit therefore comes back a few tokens short of the
+# app's boundary, and a strict `>=` marked the tier uncached: recorded live on
+# 2026-08-07, provider 2268 against a boundary of 2275, 1,161 tokens of
+# profile attributed at full price on every turn (DECISIONS.md D48, D49).
+#
+# Derived, not picked.  Measured 2026-09-10 over every assembled prompt in the
+# committed corpus -- three seeded students x three seeded conversations x
+# seven turns, both modes -- comparing the app's boundary (the sum of
+# per-block cl100k counts, which is itself one token over the concatenation
+# at the tier-1 join) against o200k_base over the same concatenated prefix,
+# the nearest encoding tiktoken carries to the live provider's:
+#
+#     tier 0 boundary  1,179-1,204 tok   short by  1-6 tokens   0.08%-0.50%
+#     tier 1 boundary  2,319-2,340 tok   short by 2-16 tokens   0.09%-0.69%
+#     whole prompt     3,174-4,345 tok   short by 8-32 tokens   0.24%-0.84%
+#
+# Never negative on this corpus, and roughly proportional to length -- which
+# is why this is a fraction, not a token count.  The live provider's own
+# tokenizer sat ~0.1 points beyond o200k in the one recorded sample (2268
+# against o200k's 2270).  Two percent is ~3x the worst boundary case and ~6x
+# the recorded live shortfall: enough that the model's real tokenizer
+# drifting from o200k does not reopen the defect, small enough that a genuine
+# miss still reads as a miss.  At a 2,320-token boundary the slack is 46
+# tokens; a tier-1 invalidation lands 1,100+ tokens short.  The only miss this
+# can hide is a tier smaller than 2% of its own boundary, and the corpus's
+# smallest cacheable tier is 48% of its boundary.
+#
+# If the "credited on boundary slack" log line (app/telemetry/cost.py) starts
+# reporting shortfalls near this figure, the corpus has changed shape -- the
+# two encodings diverge far more on non-English text -- and the answer is to
+# count with the provider's tokenizer, not to widen this.
+BOUNDARY_SLACK = 0.02
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +302,11 @@ class CallRecord:
     # What the same call would have cost with zero cache hits — the honest
     # counterfactual for "savings".  Derived, not invented.
     baseline_cost_usd: float = 0.0
+    # Tiers credited as cached on BOUNDARY_SLACK rather than outright, and by
+    # how many tokens the provider's count fell short of each boundary.  Empty
+    # when every credit was outright.  Not a ledger column (D49): the stores
+    # do not persist it; `app/telemetry/cost.py` logs one line per entry.
+    boundary_slack: dict[int, int] = field(default_factory=dict)
 
 
 @dataclass
