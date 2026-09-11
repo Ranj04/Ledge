@@ -42,7 +42,7 @@ TABLES = [Table(
 
 def test_apply_is_idempotent_on_third_run():
     conn = sqlite3.connect(":memory:")
-    assert migrate.apply(conn, "sqlite") == ["0001_initial"]
+    assert migrate.apply(conn, "sqlite") == [m.VERSION for m in migrate.load_migrations()]
     assert migrate.apply(conn, "sqlite") == []
     assert migrate.apply(conn, "sqlite") == []
 

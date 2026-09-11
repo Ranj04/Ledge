@@ -161,7 +161,10 @@ def _render(memory: Memory) -> str:
     )
 
 
-def _memory_tokens(memory: Memory) -> int:
+def rendered_tokens(memory: Memory) -> int:
+    """What one memory costs in the prompt, as rendered. The ledger's
+    `memory_registry.tokens` and `/api/memories` use it too, so the number a
+    reader sees against a memory is the number the prompt actually carries."""
     return count_tokens(_render(memory))
 
 
@@ -253,7 +256,7 @@ def _assemble_naive(
             memory_id=m.memory_id,
             memory_type=m.memory_type,
             tier=tier_for(m.memory_type),
-            tokens=_memory_tokens(m),
+            tokens=rendered_tokens(m),
             natural_tier=tier_for(m.memory_type),
         )
         for m in ordered
@@ -375,7 +378,7 @@ def _assemble_tiered(
             memory_id=m.memory_id,
             memory_type=m.memory_type,
             tier=assigned[m.memory_id],
-            tokens=_memory_tokens(m),
+            tokens=rendered_tokens(m),
             natural_tier=tier_for(m.memory_type),
         )
         for tier in (0, 1, 2, 3)
@@ -383,7 +386,7 @@ def _assemble_tiered(
     ]
 
     tier_tokens = {
-        tier: sum(_memory_tokens(m) for m in by_tier[tier]) for tier in (0, 1, 2, 3)
+        tier: sum(rendered_tokens(m) for m in by_tier[tier]) for tier in (0, 1, 2, 3)
     }
 
     # Cumulative prompt tokens through the end of each cacheable region, in

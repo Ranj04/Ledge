@@ -145,3 +145,35 @@ python scripts/migrate.py --dialect sqlite --dry-run | grep -c "probes_tested\|m
 ```
 and, with `LEDGER_PROVIDER=snowflake` at the event, `python scripts/lifecycle.py --user
 stu_maya_chen --propose` followed by `--confirm` / `GET /api/lifecycle/proposals`.
+
+---
+
+## Resolution — 2026-09-10 (T3.1, Fable)
+
+**§1 actioned as written.** `dialect` and `execute` on both stores: SQLite in autocommit, outside
+`_lock`, not through `_connect()`; Snowflake on the shared session with both `VERIFY-AT-EVENT`
+items kept on it. `lifecycle._Sqlite`, `_Snowflake`, `_snowflake_ready` and `_backend` are deleted;
+the lifecycle calls `store.execute` / `store.dialect` directly.
+
+**§2 actioned, with three departures, each measured rather than argued** (DECISIONS.md D40):
+
+* `migrate.load_migrations()[0]` inside `0002` does more than offend — it recurses, because
+  loading the directory loads `0002`. `0002` loads `0001` by path through a new
+  `migrate.load_migration(path)`.
+* "The one test change" was **six** failing tests once `0002` was on disk: four in
+  `tests/test_migrations.py`, Sol's `test_apply_is_idempotent_on_third_run`, and
+  `test_lifecycle`'s `probes_tested` test, whose manual `ALTER TABLE` now collides with the real
+  column. Your claim that `apply(...) == []` cannot hold was right. Your replacement,
+  `apply(...) == VERSIONS[1:]`, did not hold as written either: the test's degenerate one-column
+  tables (`ablation_id TEXT`) do not match the declared key, so `0002`'s re-declaration of
+  `ablation_results` was not widenable and `apply` raised `SchemaMismatch`. The degenerate tables
+  now carry their key as declared and the assertion holds; `call_log` is asserted untouched after.
+* "Snowflake is never widened by `apply`" would have made every *fresh* Snowflake account fail
+  startup between 0001 and 0002 until someone ran the `ALTER` in Snowsight. `migrate._reconcile`
+  now adds missing **nullable** columns on Snowflake with `ALTER TABLE ... ADD COLUMN`
+  (`_add_columns`, `VERIFY-AT-EVENT`, never run for real); a missing NOT NULL column is still
+  raised. Tested positive and negative against the fake cursor.
+
+Verified: `scripts/migrate.py --dialect sqlite --dry-run | grep -c "probes_tested\|memory_lifecycle\|episode_writes"`
+→ 3; `EvictionProposal.probes_tested` reads back `25` on a newly recorded row and `None` on one
+recorded without it (`tests/test_lifecycle.py`, `tests/test_api.py`). `sql/01_ddl.sql` regenerated.

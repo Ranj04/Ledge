@@ -16,35 +16,24 @@ module does, and stays soft on purpose:
   every ledger row stays, so the cost history that justified the retirement is
   still there to read — and `unretire` reverses it.
 * `should_write_episode` is the other half of the pressure problem: the chat
-  route stores every user turn as an episode with no dedup. The guard lives
-  here; the call site is Track P's (`.sol/requests/q2-lifecycle-route.md`).
+  route used to store every user turn as an episode with no dedup. The guard
+  lives here; `app/api/routes.py::_persist` calls it before every write.
 
 Storage. The lifecycle owns its two tables and the five statements that touch
 them, and asks the ledger store for one thing: run a statement in its dialect
 and report the rows and the affected-row count. `LifecycleBackend` is that
-contract. Today's stores do not carry it — they are not this track's files — so
-`_Sqlite` and `_Snowflake` below provide it from what each store exposes
-(`SqliteLedgerStore.path`, `SnowflakeLedgerStore._session()`) until the stores
-do (`.sol/requests/q2-lifecycle-store-methods.md`); `_backend` prefers the store's
-own once it exists. Every statement here is a single atomic operation on both
-backends, and `should_write_episode` depends on exactly that.
+contract; both stores carry it as `execute` and `dialect`. Every statement here
+is a single atomic operation on both backends, and `should_write_episode`
+depends on exactly that.
 
-Schema. The two tables are declared with the migration renderer's own `Table`
-and created from its rendered DDL, but they are not in `migrations/` yet: T2's
-`tests/test_migrations.py` is written against exactly one migration, so any
-`0002_*.py` turns that file red, and neither is this track's to edit. The
-request file carries the migration (`TABLES = lifecycle.TABLES`, one source of
-truth) and the test change it needs. Until it lands, the backends create the
-tables idempotently; once it lands, `migrate.apply` finds them as declared and
-records the version.
+Schema. The two tables are declared here with the migration renderer's own
+`Table` and enter the versioned schema through `migrations/0002_lifecycle.py`,
+so the store's `init_schema` creates them and nothing here does.
 """
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import sqlite3
-import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -88,12 +77,10 @@ class EvictionProposal:
     memory_type: str
     monthly_cost_usd: float
     similarity: float
-    # How many probes the verdict rests on. The harness measures it and puts it
-    # in the ledger row (`AblationResult.ledger_row`), but `ablation_results`
-    # has no column for it until migration 0002 lands — `migrations/` is not this
-    # track's to edit (see the request file) — so a row recorded without the
-    # column reads back as None. None means "not on record", never a number that
-    # was not measured; an `evict` verdict already implies at least
+    # How many probes the verdict rests on, as the harness recorded it
+    # (`AblationResult.ledger_row`). None for a row written before migration
+    # 0002 added the column: "not on record", never a number that was not
+    # measured. An `evict` verdict already implies at least
     # `ablation.harness.MIN_PROBES_FOR_EVICTION`.
     probes_tested: int | None
     reason: str
@@ -104,7 +91,7 @@ def _iso(dt: datetime) -> str:
 
 
 # ---------------------------------------------------------------------------
-# The backend contract and the two adapters that satisfy it today
+# The backend contract
 # ---------------------------------------------------------------------------
 
 Rows = list[dict[str, Any]]
@@ -123,80 +110,6 @@ class LifecycleBackend(Protocol):
         Column names in the rows are lower case.
         """
         ...
-
-
-class _Sqlite:
-    dialect: Dialect = "sqlite"
-
-    def __init__(self, store: Any) -> None:
-        self.path = store.path
-
-    async def execute(self, sql: str, params: Sequence[Any] = ()) -> tuple[Rows, int]:
-        def go():
-            # Autocommit: each statement is its own transaction, and a write that
-            # meets another writer waits on the busy timeout — SQLite retries the
-            # write lock while the connection holds no transaction yet, the same
-            # path `BEGIN IMMEDIATE` takes. A read-then-write inside one
-            # transaction is what this replaced: the read fixed a snapshot, and
-            # SQLite returns SQLITE_BUSY without retrying rather than deadlock.
-            conn = sqlite3.connect(self.path, timeout=10.0, isolation_level=None)
-            conn.row_factory = sqlite3.Row
-            try:
-                for table in TABLES:
-                    conn.execute(migrate.render(table, "sqlite"))
-                cur = conn.execute(sql, params)
-                return [dict(r) for r in cur.fetchall()], cur.rowcount
-            finally:
-                conn.close()
-
-        return await asyncio.to_thread(go)
-
-
-# Stores whose lifecycle tables this process has already created. A Snowflake
-# round trip is not free, so the two CREATE IF NOT EXISTS run once per store
-# rather than once per call.
-_snowflake_ready: weakref.WeakSet[Any] = weakref.WeakSet()
-
-
-class _Snowflake:
-    dialect: Dialect = "snowflake"
-
-    def __init__(self, store: Any) -> None:
-        self.store = store
-
-    async def execute(self, sql: str, params: Sequence[Any] = ()) -> tuple[Rows, int]:
-        def go():
-            # VERIFY-AT-EVENT: has never run against a real account (the connector
-            # is not installed here). `_session()` is the store's shared, locked
-            # connection; the connector autocommits DML, so each statement is its
-            # own transaction, and Snowflake serialises DML on a table. A real run
-            # must confirm (1) `cursor.rowcount` on a MERGE is the connector's sum
-            # of "number of rows inserted" and "number of rows updated" — that sum
-            # is what `should_write_episode` reads as "claimed" — and (2)
-            # `WHEN MATCHED AND t.ts < TO_TIMESTAMP_NTZ(%s)` binds the ISO-Z
-            # string the way the stores' own inserts already do.
-            with self.store._session() as conn, conn.cursor() as cur:
-                if self.store not in _snowflake_ready:
-                    for table in TABLES:
-                        cur.execute(migrate.render(table, "snowflake"))
-                    _snowflake_ready.add(self.store)
-                cur.execute(sql, params)
-                if cur.description is None:
-                    return [], cur.rowcount
-                names = [d[0].lower() for d in cur.description]
-                return [dict(zip(names, row)) for row in cur.fetchall()], cur.rowcount
-
-        return await asyncio.to_thread(go)
-
-
-def _backend(store: Any) -> LifecycleBackend:
-    if hasattr(store, "execute") and hasattr(store, "dialect"):
-        return store  # the store carries the contract itself
-    if hasattr(store, "path"):
-        return _Sqlite(store)
-    if hasattr(store, "_session"):
-        return _Snowflake(store)
-    raise TypeError(f"{type(store).__name__} offers no lifecycle backend")
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +210,7 @@ async def propose_evictions(
         row["memory_id"]: float(row["monthly_cost_usd"] or 0.0)
         for row in await store.memory_costs(user_id=user_id)
     }
-    backend = _backend(store)
-    rows, _ = await backend.execute(
-        _sql(backend.dialect, _LATEST_VERDICTS), (user_id, user_id, cutoff)
-    )
+    rows, _ = await store.execute(_sql(store.dialect, _LATEST_VERDICTS), (user_id, user_id, cutoff))
 
     proposals = []
     for row in rows:
@@ -345,15 +255,13 @@ async def confirm_retirement(
     now: datetime | None = None,
 ) -> None:
     """The operator's decision. Soft: sets `retired_at`, deletes nothing."""
-    backend = _backend(store or make_ledger_store())
-    await backend.execute(
-        _RETIRE[backend.dialect], (memory_id, _iso(now or datetime.now(UTC)), reason)
-    )
+    store = store or make_ledger_store()
+    await store.execute(_RETIRE[store.dialect], (memory_id, _iso(now or datetime.now(UTC)), reason))
 
 
 async def unretire(memory_id: str, *, store: Any | None = None) -> None:
-    backend = _backend(store or make_ledger_store())
-    await backend.execute(_sql(backend.dialect, _UNRETIRE), (memory_id,))
+    store = store or make_ledger_store()
+    await store.execute(_sql(store.dialect, _UNRETIRE), (memory_id,))
 
 
 async def exclude_retired(
@@ -362,11 +270,11 @@ async def exclude_retired(
     """What retrieval hands the assembler once retirement is applied.
 
     Retrieval itself is EverOS's, and a retired memory is not deleted there, so
-    the exclusion is a filter on the retrieved set. The chat route applies it
-    (`.sol/requests/q2-lifecycle-route.md`).
+    the exclusion is a filter on the retrieved set; the chat and inspect routes
+    apply it to everything `everos.retrieve` returns.
     """
-    backend = _backend(store or make_ledger_store())
-    rows, _ = await backend.execute(_RETIRED_IDS)
+    store = store or make_ledger_store()
+    rows, _ = await store.execute(_RETIRED_IDS)
     retired = {r["memory_id"] for r in rows}
     return [m for m in memories if m.memory_id not in retired]
 
@@ -390,8 +298,7 @@ async def should_write_episode(
     now = now or datetime.now(UTC)
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     window_start = _iso(now - timedelta(minutes=window_minutes))
-    backend = _backend(store)
-    _, affected = await backend.execute(
-        _CLAIM_EPISODE[backend.dialect], (user_id, digest, _iso(now), window_start)
+    _, affected = await store.execute(
+        _CLAIM_EPISODE[store.dialect], (user_id, digest, _iso(now), window_start)
     )
     return affected > 0

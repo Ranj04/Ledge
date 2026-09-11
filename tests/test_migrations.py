@@ -2,8 +2,12 @@
 
 The rest pin what `apply` does when a table already exists (D38): a matching one is
 recorded, one that only lacks columns is widened, anything else raises and records
-nothing — on Snowflake too, exercised through a cursor that answers SHOW TABLES and
-DESC TABLE the way the connector does.
+nothing — on Snowflake too, exercised through a cursor that answers SHOW TABLES,
+DESC TABLE and ALTER TABLE the way the connector does.
+
+Two migrations are on disk, and 0002 re-declares `ablation_results` with one more
+column, so a pre-versioned ledger is 0001's tables (`INITIAL`) and a current ledger
+is each table's last declaration (`TABLES`).
 """
 
 from __future__ import annotations
@@ -14,8 +18,14 @@ import pytest
 
 from app.telemetry import migrate
 
-TABLES = [t for m in migrate.load_migrations() for t in m.TABLES] + [migrate.MIGRATIONS_TABLE]
-VERSIONS = [m.VERSION for m in migrate.load_migrations()]
+MIGRATIONS = migrate.load_migrations()
+VERSIONS = [m.VERSION for m in MIGRATIONS]
+# Every declaration in order; a table a later version re-declares appears twice.
+DECLARATIONS = [t for m in MIGRATIONS for t in m.TABLES]
+# What a ledger from before versioning has: 0001's tables in 0001's shape.
+INITIAL = MIGRATIONS[0].TABLES
+# What a current ledger has: the last declaration of each table, and the version table.
+TABLES = [*{t.name: t for t in DECLARATIONS}.values(), migrate.MIGRATIONS_TABLE]
 CALL_LOG = TABLES[0]
 
 
@@ -31,7 +41,7 @@ def _column_names(ddl: str) -> list[str]:
 
 def test_both_dialects_declare_the_same_columns_in_the_same_order():
     """What makes the parity claim in sqlite_store's docstring true, not aspirational."""
-    for table in TABLES:
+    for table in DECLARATIONS:
         sqlite_cols = _column_names(migrate.render(table, "sqlite"))
         snowflake_cols = _column_names(migrate.render(table, "snowflake"))
         assert sqlite_cols == snowflake_cols, table.name
@@ -53,7 +63,7 @@ def test_migrations_are_idempotent():
 
 def test_every_column_uses_one_of_the_five_logical_types():
     """Stops a future migration smuggling a dialect-specific type into the neutral layer."""
-    for table in TABLES:
+    for table in DECLARATIONS:
         for name, logical, nullable, primary_key in table.columns:
             assert logical in migrate.LOGICAL_TYPES, f"{table.name}.{name}: {logical}"
             assert isinstance(nullable, bool) and isinstance(primary_key, bool), name
@@ -83,7 +93,7 @@ def _pre_d37_ddl(table: migrate.Table) -> str:
 def test_pre_versioned_ledger_with_inline_keys_is_recorded_as_current():
     """The demo ledger must not fail at startup: a key column is NOT NULL by intent."""
     conn = sqlite3.connect(":memory:")
-    for table in TABLES[:-1]:
+    for table in INITIAL:
         if sum(pk for *_, pk in table.columns) == 1:
             conn.execute(_pre_d37_ddl(table))
     assert migrate.apply(conn, "sqlite") == VERSIONS
@@ -156,15 +166,20 @@ def test_adopt_baseline_records_without_applying_and_reports_every_difference():
         migrate.adopt(conn, "sqlite", "9999_nope")
     with pytest.raises(migrate.MigrationError, match="does not exist"):
         migrate.adopt(conn, "sqlite", VERSIONS[0])
-    for table in TABLES[:-1]:
-        conn.execute(f"CREATE TABLE {table.name} ({table.columns[0][0]} TEXT)")
+    for table in INITIAL:
+        # The key as declared and nothing else: adoptable with every other column
+        # reported missing, and — because the one column matches — still widenable
+        # by whatever a later version declares for the table.
+        conn.execute(f"CREATE TABLE {table.name} ({table.columns[0][0]} TEXT PRIMARY KEY)")
     report = migrate.adopt(conn, "sqlite", VERSIONS[0])
     assert report[0] == "call_log: adopted with these differences"
     assert "  tier_tokens: declared TEXT, not present" in report
     columns = [r[1] for r in conn.execute("PRAGMA table_info(call_log)")]
     assert columns == ["call_id"], "nothing applied"
     assert conn.execute("SELECT version FROM schema_migrations").fetchall() == [(VERSIONS[0],)]
-    assert migrate.apply(conn, "sqlite") == []
+    # Adopting a version does not apply it — and does not stop the later ones.
+    assert migrate.apply(conn, "sqlite") == VERSIONS[1:]
+    assert [r[1] for r in conn.execute("PRAGMA table_info(call_log)")] == ["call_id"]
     with pytest.raises(migrate.MigrationError, match="already recorded"):
         migrate.adopt(conn, "sqlite", VERSIONS[0])
 
@@ -181,7 +196,14 @@ _DESC_TYPES = {
     "bool": "BOOLEAN",
 }
 _DESC_HEADERS = [(h,) for h in ("name", "type", "kind", "null?", "default", "primary key")]
-_BY_UPPER = {table.name.upper(): table for table in TABLES}
+# A CREATE is matched to the declaration by its exact text, not its table name:
+# 0001 and 0002 both declare ABLATION_RESULTS, and the fake must build the shape
+# the statement asks for.
+_BY_DDL = {
+    migrate.render(table, "snowflake"): table
+    for table in [*DECLARATIONS, migrate.MIGRATIONS_TABLE]
+}
+_LOGICAL = {v: k for k, v in migrate._TYPES["snowflake"].items()}
 
 
 def _desc_rows_as_declared(table: migrate.Table) -> list[tuple]:
@@ -201,11 +223,12 @@ def _desc_rows_as_declared(table: migrate.Table) -> list[tuple]:
 class _FakeSnowflake:
     """Tables persist the moment CREATE runs and `rollback` undoes nothing, which is
     what Snowflake's per-statement DDL commit amounts to. `fail_on` names a table
-    whose CREATE errors."""
+    whose CREATE errors. ADD COLUMN appends a nullable column, as Snowflake does."""
 
     def __init__(self, fail_on: str | None = None) -> None:
         self.tables: dict[str, list[tuple]] = {}
         self.versions: list[str] = []
+        self.alters: list[str] = []
         self.fail_on = fail_on
 
     def cursor(self):
@@ -230,7 +253,13 @@ class _FakeCursor:
             name = sql.split()[5]
             if name == self.db.fail_on:
                 raise RuntimeError(f"SQL compilation error: {name}")
-            self.db.tables.setdefault(name, _desc_rows_as_declared(_BY_UPPER[name]))
+            self.db.tables.setdefault(name, _desc_rows_as_declared(_BY_DDL[sql]))
+        elif sql.startswith("ALTER TABLE "):
+            _, _, name, _, _, column, typ = sql.split()
+            self.db.alters.append(sql)
+            self.db.tables[name].append(
+                (column, _DESC_TYPES[_LOGICAL[typ]], "COLUMN", "Y", None, "N")
+            )
         elif sql.startswith("SHOW TABLES LIKE "):
             name = sql.split("'")[1]
             self._rows = [(name,)] if name in self.db.tables else []
@@ -278,6 +307,22 @@ def test_snowflake_2026_08_07_tables_are_refused_not_adopted():
     assert "  SESSION_ID: declared VARCHAR NOT NULL, found VARCHAR\n" in msg
     assert f"--dialect snowflake --adopt-baseline {VERSIONS[0]}" in msg
     assert db.versions == []
+
+
+def test_snowflake_widening_adds_nullable_columns_in_place_and_nothing_else():
+    """0002 re-declares ABLATION_RESULTS with PROBES_TESTED. Snowflake cannot be
+    rebuilt the way SQLite is, so the column is added with ALTER TABLE — and only
+    a nullable one: a missing NOT NULL column is raised, nothing recorded."""
+    db = _FakeSnowflake()
+    assert migrate.apply(db, "snowflake") == VERSIONS
+    assert db.alters == ["ALTER TABLE ABLATION_RESULTS ADD COLUMN PROBES_TESTED NUMBER"]
+    assert [r[0] for r in db.tables["ABLATION_RESULTS"]][-1] == "PROBES_TESTED"
+
+    db = _FakeSnowflake()
+    db.tables["CALL_LOG"] = _desc_rows_as_declared(CALL_LOG)[:-1]  # baseline_cost_usd, NOT NULL
+    with pytest.raises(migrate.SchemaMismatch, match="BASELINE_COST_USD: declared FLOAT NOT NULL"):
+        migrate.apply(db, "snowflake")
+    assert db.alters == [] and db.versions == []
 
 
 def test_snowflake_partial_version_is_reported_and_a_rerun_completes_it():

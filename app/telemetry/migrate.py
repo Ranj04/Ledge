@@ -117,14 +117,18 @@ def render_indexes(table: Table, dialect: Dialect) -> list[str]:
     ]
 
 
+def load_migration(path: Path) -> ModuleType:
+    """One migration module by path. A later migration that re-declares an earlier
+    table starts from this rather than `load_migrations()`, which would load itself."""
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_migrations(directory: Path = MIGRATIONS_DIR) -> list[ModuleType]:
     """Every `NNNN_*.py` in `migrations/`, sorted by its `VERSION`."""
-    modules = []
-    for path in sorted(directory.glob("[0-9]*.py")):
-        spec = importlib.util.spec_from_file_location(path.stem, path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        modules.append(module)
+    modules = [load_migration(path) for path in sorted(directory.glob("[0-9]*.py"))]
     return sorted(modules, key=lambda m: m.VERSION)
 
 
@@ -226,27 +230,51 @@ def _widen(cur: Any, table: Table, existing: list[str]) -> None:
     cur.execute(f"ALTER TABLE {tmp} RENAME TO {table.name}")
 
 
+def _add_columns(cur: Any, table: Table, missing: list[Column]) -> None:
+    # Snowflake's ADD COLUMN cannot supply a NOT NULL value for existing rows and
+    # its DDL is not transactional (see `_apply_version`), so only a set of
+    # nullable columns is added, one ALTER each, in declaration order. They land
+    # at the end of the table, which is where a later migration declares them;
+    # anything else fails the order check in `_reconcile` and is raised.
+    # VERIFY-AT-EVENT: has never run against a real account. A real run must
+    # confirm that DESC TABLE lists an added column last, as NUMBER(38,0) for
+    # `int`, and nullable — 0002's PROBES_TESTED is the first case.
+    if any(not nullable for _, _, nullable, _ in missing):
+        return
+    for name, logical, _, _ in missing:
+        cur.execute(
+            f"ALTER TABLE {_ident(table.name, 'snowflake')} ADD COLUMN "
+            f"{_ident(name, 'snowflake')} {_TYPES['snowflake'][logical]}"
+        )
+
+
 def _reconcile(cur: Any, table: Table, dialect: Dialect, version: str) -> None:
     """Refuse to let `IF NOT EXISTS` pass an older table off as the declared one.
 
     A matching table is fine whoever created it — `sql/01_ddl.sql` run in
-    Snowsight, or the service before versioning existed. On SQLite a table whose
-    every column is as declared and merely lacks some is widened: that is the one
+    Snowsight, or the service before versioning existed. A table whose every
+    column is as declared and merely lacks some is widened: that is the one
     change a later migration routinely needs (this system declares whole tables,
     not diffs) and it is lossless, since each existing value lands in a column of
-    the same name and type. Everything else — a type, key or nullability that
-    differs, a column the declaration does not have — means the data needs a
-    person, and is raised. Snowflake is never widened here: its DDL cannot be
-    rolled back (see `_apply_version`), so the operator runs the ALTER in Snowsight
-    and re-runs, or adopts the tables as they are.
+    the same name and type. SQLite rebuilds the table (`_widen`); Snowflake adds
+    the columns with ALTER TABLE, and only when all of them are nullable
+    (`_add_columns`). Everything else — a type, key or nullability that differs,
+    a column the declaration does not have, a NOT NULL column to add on
+    Snowflake — means the data needs a person, and is raised: the operator brings
+    the table to shape in Snowsight and re-runs, or adopts it as it is.
     """
     declared = declared_shape(table, dialect)
     physical = physical_shape(cur, table, dialect) or []
     if physical == declared:
         return
     want = {s[0]: s for s in declared}
-    if dialect == "sqlite" and all(want.get(s[0]) == s for s in physical):
-        _widen(cur, table, [s[0] for s in physical])
+    if all(want.get(s[0]) == s for s in physical):
+        have = {s[0] for s in physical}
+        if dialect == "sqlite":
+            _widen(cur, table, [s[0] for s in physical])
+        else:
+            missing = [c for c in table.columns if _ident(c[0], dialect) not in have]
+            _add_columns(cur, table, missing)
         physical = physical_shape(cur, table, dialect) or []
         if physical == declared:
             return

@@ -57,7 +57,10 @@ def test_render_is_one_line_for_every_hostile_input(content: str) -> None:
     assert rendered.count("\n") == 1
     assert rendered.endswith("\n")
     assert len(rendered.splitlines()) == 1
-    assert rendered.startswith("- ")
+    # Q1 (05c8957) replaced the `- ` bullet with one `<memory>` element per
+    # memory; the invariant is unchanged. tests/test_injection.py covers the
+    # element's well-formedness in depth; this keeps the hostile set here live.
+    assert rendered.startswith("<memory ") and rendered.endswith("</memory>\n")
 
     block = _block_text("## Recent sessions", [_mem(content)])
     assert len(_memory_lines(block)) <= 1

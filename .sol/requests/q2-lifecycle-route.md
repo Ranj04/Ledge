@@ -158,3 +158,23 @@ what the prompt actually carries.
 `lifecycle.py` because the store files are not this track's. The public surface that
 replaces those adapters is `q2-lifecycle-store-methods.md` §1. The Snowflake path has
 never run; its `# VERIFY-AT-EVENT:` items are listed there.
+
+---
+
+## Resolution — 2026-09-10 (T3.1, Fable)
+
+Actioned, every item, in `app/api/routes.py`:
+
+1. The episode dedup guard at the `_persist` write site, as specified, through
+   `should_write_episode(service.ledger, user_id, content, settings.episode_dedup_window_minutes)`.
+   Pinned by `tests/test_api.py::test_the_same_turn_sent_twice_writes_one_episode`.
+2. `GET /api/lifecycle/proposals` — `lifecycle_proposals(principal: Authenticated)`. The tenant is
+   `principal.tenant_id` (Track P's `Principal` has no `user_id` field) and never the query string:
+   `tests/test_api.py::test_the_lifecycle_proposals_route_requires_a_key` and
+   `..._ignores_a_user_id_query_parameter` (passes `?user_id=<other tenant>`, gets its own).
+3. `exclude_retired(...)` after both `everos.retrieve(...)` calls, in `chat` and `inspect`.
+4. Superseded by `q2-lifecycle-store-methods.md`; see its resolution for what "one test change"
+   turned out to be.
+5. `_persist` and `/api/memories` count tokens with `app.assembler.assemble.rendered_tokens` — the
+   assembler's helper made public under that name (`memory_tokens` collides with a local in
+   `assemble()`). `grep -c 'f"- {memory.content}' app/api/routes.py` → 0.

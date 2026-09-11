@@ -48,11 +48,13 @@ async def _seen(store, memory_id, memory_type, *, user=USER, cost=0.01) -> None:
     )
 
 
-async def _ablated(store, memory_id, verdict, *, user=USER, similarity=1.0) -> None:
+async def _ablated(
+    store, memory_id, verdict, *, user=USER, similarity=1.0, probes_tested=None
+) -> None:
     await store.record_ablation({
         "ablation_id": f"abl_{memory_id}", "memory_id": memory_id, "user_id": user,
         "ts": lifecycle._iso(NOW), "similarity": similarity, "verdict": verdict,
-        "tokens_saved": 40, "monthly_cost_usd": 0.0,
+        "tokens_saved": 40, "monthly_cost_usd": 0.0, "probes_tested": probes_tested,
     })
 
 
@@ -150,8 +152,7 @@ async def test_concurrent_identical_episodes_yield_exactly_one_writer(tmp_path):
     """The claim is one atomic statement, so contention cannot split it.
 
     Sol's review test (`tests/review/test_q_lifecycle_adversarial.py`) runs
-    twelve; this is the same scenario at fifty, on a ledger whose lifecycle
-    tables do not exist yet, so table creation is under contention too.
+    twelve; this is the same scenario at fifty.
     """
     import asyncio
 
@@ -164,50 +165,44 @@ async def test_concurrent_identical_episodes_yield_exactly_one_writer(tmp_path):
     assert results.count(False) == 49
 
 
-async def test_probes_tested_is_an_int_once_the_ledger_carries_the_column(tmp_path):
-    """`propose_evictions` reads `probes_tested` through `a.*`: absent column ->
-    None, present column -> the recorded integer. Migration 0002 is the only
-    thing between the two (`.sol/requests/q2-lifecycle-store-methods.md`)."""
-    import sqlite3
+async def test_probes_tested_is_the_recorded_integer_or_none_when_unrecorded(tmp_path):
+    """The count the harness recorded comes back as an int; a row written without
+    one — any row from before migration 0002 added the column — comes back as
+    None, never as a number that was not measured."""
+    store = await _store(tmp_path)
+    await _seen(store, "mem_counted", "fact")
+    await _ablated(store, "mem_counted", "evict", probes_tested=25)
+    await _seen(store, "mem_legacy", "fact")
+    await _ablated(store, "mem_legacy", "evict")
+
+    by_id = {
+        p.memory_id: p
+        for p in await lifecycle.propose_evictions(
+            USER, min_age_days=1, min_monthly_cost_usd=0.0, store=store, now=LATER
+        )
+    }
+    counted, legacy = by_id["mem_counted"], by_id["mem_legacy"]
+    assert counted.probes_tested == 25 and isinstance(counted.probes_tested, int)
+    assert "25 probes" in counted.reason
+    assert legacy.probes_tested is None
+    assert "unrecorded probe count" in legacy.reason
+
+
+async def test_both_stores_carry_the_lifecycle_contract(tmp_path):
+    """The lifecycle runs on whatever `make_ledger_store` returns, so both stores
+    expose the one statement it needs, in their own dialect, with the affected
+    row count that the episode claim reads as its answer."""
+    from app.telemetry.snowflake_store import SnowflakeLedgerStore
+
+    assert SnowflakeLedgerStore.dialect == "snowflake"
+    assert callable(SnowflakeLedgerStore.execute)
 
     store = await _store(tmp_path)
-    await _seen(store, "mem_fact", "fact")
-    await _ablated(store, "mem_fact", "evict")
-    (before,) = await lifecycle.propose_evictions(
-        USER, min_age_days=1, min_monthly_cost_usd=0.0, store=store, now=LATER
+    assert store.dialect == "sqlite"
+    rows, affected = await store.execute(
+        "INSERT INTO memory_lifecycle (memory_id, retired_at, retired_reason) VALUES (?, ?, ?)",
+        ("mem_x", lifecycle._iso(NOW), "why"),
     )
-    assert before.probes_tested is None
-    assert "unrecorded probe count" in before.reason
-
-    conn = sqlite3.connect(store.path)
-    conn.execute("ALTER TABLE ablation_results ADD COLUMN probes_tested INTEGER")
-    conn.execute("UPDATE ablation_results SET probes_tested = 25")
-    conn.commit()
-    conn.close()
-    (after,) = await lifecycle.propose_evictions(
-        USER, min_age_days=1, min_monthly_cost_usd=0.0, store=store, now=LATER
-    )
-    assert after.probes_tested == 25 and isinstance(after.probes_tested, int)
-    assert "25 probes" in after.reason
-
-
-async def test_the_backend_is_chosen_by_what_the_store_exposes(tmp_path):
-    """A store that carries the contract itself is used as-is; the SQLite
-    store is adapted from its path; the Snowflake store from its session."""
-    from contextlib import contextmanager
-
-    class Carries:
-        dialect = "sqlite"
-
-        async def execute(self, sql, params=()):
-            return [], 0
-
-    class SessionOnly:
-        @contextmanager
-        def _session(self):
-            yield None
-
-    carries = Carries()
-    assert lifecycle._backend(carries) is carries
-    assert lifecycle._backend(await _store(tmp_path)).dialect == "sqlite"
-    assert lifecycle._backend(SessionOnly()).dialect == "snowflake"
+    assert (rows, affected) == ([], 1)
+    rows, affected = await store.execute("SELECT memory_id FROM memory_lifecycle")
+    assert rows == [{"memory_id": "mem_x"}] and affected in (-1, 1)

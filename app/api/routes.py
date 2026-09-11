@@ -9,6 +9,7 @@ before the user saw a word.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import time
@@ -24,12 +25,13 @@ from app.api.auth import Principal
 from app.api.limits import SpendCeiling
 from app.api.schemas import ChatRequest, InspectRequest
 from app.api.service import Service, get_service
-from app.assembler.assemble import assemble
+from app.assembler.assemble import assemble, rendered_tokens
 from app.assembler.tiering import TIER_NAMES, TIER_SOURCE, TierRegistry
 from app.contracts import AssembledPrompt, Usage
 from app.cortex.tokens import count_tokens
 from app.logging_setup import request_id_var
 from app.telemetry.cost import build_records
+from app.telemetry.lifecycle import exclude_retired, propose_evictions, should_write_episode
 
 logger = logging.getLogger("memoryledger")
 Authenticated = Annotated[Principal, Depends(auth.resolve)]
@@ -124,6 +126,7 @@ async def chat(
     memories = await service.everos.retrieve(
         user_id=user_id, query=req.message, session_id=req.session_id
     )
+    memories = await exclude_retired(memories, store=service.ledger)
     if not memories and not service.students():
         raise HTTPException(404, "no seed data — run `python -m seed.generate`")
 
@@ -300,17 +303,24 @@ async def _persist(
                     "content_hash": state.content_hash,
                     "tier": state.tier,
                     "stable_calls": state.stable_calls,
-                    "tokens": count_tokens(f"- {memory.content}\n"),
+                    "tokens": rendered_tokens(memory),
                 }
             )
         if rows:
             await service.ledger.upsert_memories(rows)
 
-        # The turn itself becomes an episodic memory.
+        # The turn itself becomes an episodic memory — unless an identical turn
+        # inside the window already is one. A second copy would cost tokens on
+        # every later prompt and add nothing.
+        content = f"Student asked: {req.message[:200]}"
+        if not await should_write_episode(
+            service.ledger, user_id, content, service.settings.episode_dedup_window_minutes
+        ):
+            return
         await service.everos.write(
             user_id=user_id,
             memory_type="episode",
-            content=f"Student asked: {req.message[:200]}",
+            content=content,
             session_id=req.session_id,
             metadata={"call_id": call.call_id, "source": "live-session"},
         )
@@ -332,6 +342,7 @@ async def inspect(req: InspectRequest, principal: Authenticated) -> dict[str, An
     """
     service = svc()
     memories = await service.everos.retrieve(user_id=principal.tenant_id, query=req.message)
+    memories = await exclude_retired(memories, store=service.ledger)
 
     # A throwaway registry seeded from the live session's tier state, so the
     # inspector shows the tiers the next real call would use.
@@ -535,6 +546,23 @@ async def ablation_results(
     return {"results": rows, "provenance": "live" if svc().settings.is_live else "simulated"}
 
 
+@router.get("/lifecycle/proposals")
+async def lifecycle_proposals(principal: Authenticated) -> list[dict[str, Any]]:
+    """The memories the evidence says are safe to retire, for this key's tenant.
+
+    The tenant comes from the credential and nowhere else — a `user_id` query
+    parameter is not read. Listing is not retiring: nothing here writes.
+    """
+    s = svc().settings
+    proposals = await propose_evictions(
+        principal.tenant_id,
+        min_age_days=s.lifecycle_min_age_days,
+        min_monthly_cost_usd=s.lifecycle_min_monthly_cost_usd,
+        store=svc().ledger,
+    )
+    return [dataclasses.asdict(p) for p in proposals]
+
+
 @router.get("/memories")
 async def memories(principal: Authenticated) -> list[dict[str, Any]]:
     return [
@@ -544,7 +572,7 @@ async def memories(principal: Authenticated) -> list[dict[str, Any]]:
             "memory_type": m.memory_type,
             "natural_tier": memory_types.tier_for(m.memory_type),
             "content": m.content,
-            "tokens": count_tokens(f"- {m.content}\n"),
+            "tokens": rendered_tokens(m),
             "updated_at": m.updated_at,
             "metadata": m.metadata,
         }

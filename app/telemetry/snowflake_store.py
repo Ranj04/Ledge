@@ -31,6 +31,8 @@ from app.telemetry import migrate
 
 
 class SnowflakeLedgerStore:
+    dialect = "snowflake"
+
     def __init__(self) -> None:
         self.settings = get_settings()
         self._conn = None
@@ -118,6 +120,35 @@ class SnowflakeLedgerStore:
                     return []
                 columns = [d[0].lower() for d in cur.description]
                 return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+    async def execute(
+        self, sql: str, params: Sequence[Any] = ()
+    ) -> tuple[list[dict[str, Any]], int]:
+        """One statement on the shared connection. See lifecycle.LifecycleBackend.
+
+        `_query` without the rowcount is not enough: the lifecycle's episode claim
+        is a MERGE whose affected-row count is the answer.
+        """
+
+        def go():
+            # VERIFY-AT-EVENT: has never run against a real account (the connector
+            # is not installed here). The connector autocommits DML, so each
+            # statement is its own transaction, and Snowflake serialises DML on a
+            # table. A real run must confirm (1) `cursor.rowcount` on a MERGE is
+            # the connector's sum of "number of rows inserted" and "number of rows
+            # updated" — that sum is what `should_write_episode` reads as
+            # "claimed"; if it reports -1 or only the inserted count, read the
+            # MERGE's result row (those two columns) and sum it instead — and (2)
+            # `WHEN MATCHED AND t.ts < TO_TIMESTAMP_NTZ(%s)` binds the ISO-Z
+            # string the way this store's own inserts already do.
+            with self._session() as conn, conn.cursor() as cur:
+                cur.execute(sql, params)
+                if cur.description is None:
+                    return [], cur.rowcount
+                names = [d[0].lower() for d in cur.description]
+                return [dict(zip(names, row)) for row in cur.fetchall()], cur.rowcount
+
+        return await self._run(go)
 
     # -- LedgerStore -------------------------------------------------------
 
@@ -293,14 +324,19 @@ class SnowflakeLedgerStore:
         def go():
             with self._session() as conn:
                 with conn.cursor() as cur:
+                    # Columns named, not positional: 0002 widened the table and a
+                    # positional INSERT would silently shift on the next widening.
                     cur.execute(
-                        """INSERT INTO ABLATION_RESULTS VALUES
-                           (%s,%s,%s,TO_TIMESTAMP_NTZ(%s),%s,%s,%s,%s,%s,%s,%s)""",
+                        """INSERT INTO ABLATION_RESULTS
+                           (ABLATION_ID, MEMORY_ID, USER_ID, TS, PROMPT, BASELINE_ANSWER,
+                            ABLATED_ANSWER, SIMILARITY, VERDICT, TOKENS_SAVED,
+                            MONTHLY_COST_USD, PROBES_TESTED)
+                           VALUES (%s,%s,%s,TO_TIMESTAMP_NTZ(%s),%s,%s,%s,%s,%s,%s,%s,%s)""",
                         (row["ablation_id"], row["memory_id"], row["user_id"], row["ts"],
                          row.get("prompt"), row.get("baseline_answer"),
                          row.get("ablated_answer"), row.get("similarity"),
                          row.get("verdict"), row.get("tokens_saved"),
-                         row.get("monthly_cost_usd")),
+                         row.get("monthly_cost_usd"), row.get("probes_tested")),
                     )
 
         await self._run(go)

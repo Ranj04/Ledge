@@ -121,7 +121,12 @@ def test_a_failed_provider_call_does_not_count_against_the_spend_ceiling(
             raise ValueError("provider broke")
             yield
 
-    with _client(tmp_path, monkeypatch, SPEND_CEILING_USD="0.02") as client:
+    # One turn reserves $0.0252 before the model is called (measured 2026-09-10;
+    # tests/test_limits.py::ONE_TURN_CEILING_USD). The ceiling must admit one
+    # full reservation, so a refusal here can only mean a released reservation
+    # was still counted. $0.02 sat below one reservation once Q1 grew the prompt
+    # and refused the second call for the right total and the wrong reason.
+    with _client(tmp_path, monkeypatch, SPEND_CEILING_USD="0.03") as client:
         service_module.get_service().cortex = Broken()
         statuses = []
         for i in range(10):

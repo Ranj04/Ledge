@@ -390,8 +390,9 @@ step.
 reaches every lifecycle operation (`.review/q/1` F2) instead of raising, and the connector is not
 installed in this venv, so nothing on that path has executed.
 
-`app/telemetry/lifecycle.py :: _Snowflake.execute` carries the `# VERIFY-AT-EVENT:` marker. A
-real run must confirm:
+`app/telemetry/snowflake_store.py :: SnowflakeLedgerStore.execute` carries the
+`# VERIFY-AT-EVENT:` marker (moved from the lifecycle's adapter when T3.1 landed
+`.sol/requests/q2-lifecycle-store-methods.md`). A real run must confirm:
 
 1. `cursor.rowcount` after the `_CLAIM_EPISODE` `MERGE` is 1 for a fresh or expired row and 0
    for a row inside the window. `should_write_episode` reads `affected > 0` as "this caller
@@ -399,25 +400,23 @@ real run must confirm:
    (*number of rows inserted* + *number of rows updated*) instead.
 2. `TO_TIMESTAMP_NTZ(%s)` binds the ISO-Z strings `_iso` produces, in `WHERE r.first_seen <=`
    and `WHEN MATCHED AND t.ts <` as it already does in the stores' own inserts.
-3. The two `CREATE TABLE IF NOT EXISTS` renderings of `lifecycle.TABLES` land in
-   `MEMORYLEDGER.LEDGER` and `DESC TABLE` matches `migrate.declared_shape` (else 0002 will refuse
-   them, D38).
+3. Migration 0002 creates `MEMORY_LIFECYCLE` and `EPISODE_WRITES` and adds `PROBES_TESTED` to
+   `ABLATION_RESULTS` with `ALTER TABLE ... ADD COLUMN` (`migrate._add_columns`, its own
+   `# VERIFY-AT-EVENT:`, never run): `DESC TABLE` must then list the column last, as
+   `NUMBER(38,0)`, nullable, or `apply` refuses 0002 and records nothing (D38, D40). On the
+   2026-08-07 trial tables 0001 itself is refused first; see the `init_schema` marker.
 4. Exactly-once under contention across **processes** is Snowflake's table-level DML lock, not
    this code; within one process the store's shared connection serialises it. Not measured.
 
 *To resolve:* with credentials, `python scripts/lifecycle.py --user stu_maya_chen --propose`,
-then `--confirm`, then two identical chat turns inside a minute and one `EPISODE_WRITES` row.
-Once T3.1 lands `.sol/requests/q2-lifecycle-store-methods.md`, the marker moves to the store.
+then `--confirm`, then two identical chat turns inside a minute and one `EPISODE_WRITES` row, then
+`GET /api/lifecycle/proposals` with the tenant's key.
 
 ## 2026-09-10 — `probes_tested` cannot reach the ledger until migration 0002
 
-**Status:** open, by constraint. `EvictionProposal.probes_tested` is `int | None` and is `None`
-on every proposal today (`.review/q/1` F3): the harness now writes the count into the ledger row,
-both stores drop keys their column list lacks, and `ablation_results` gains the column only in
-0002 — `migrations/`, `app/telemetry/migrate.py` and `tests/test_migrations.py` are all outside
-this track. `propose_evictions` reads `a.*`, so no code change is needed when the column lands;
-`tests/test_lifecycle.py::test_probes_tested_is_an_int_once_the_ledger_carries_the_column` shows
-the integer coming back after an `ALTER TABLE`.
-
-*To resolve:* land §2 of `.sol/requests/q2-lifecycle-store-methods.md` (the migration, the
-named-column Snowflake INSERT, the test change). Rows recorded before it stay `None`.
+**Status:** resolved 2026-09-10 (T3.1). `migrations/0002_lifecycle.py` adds the column, both
+stores write it (the Snowflake INSERT names its columns now), and a newly recorded proposal
+carries the integer (`tests/test_api.py::test_the_lifecycle_proposals_route_ignores_a_user_id_query_parameter`
+asserts 25). Rows recorded before the column stay `None`, by design
+(`tests/test_lifecycle.py::test_probes_tested_is_the_recorded_integer_or_none_when_unrecorded`).
+On Snowflake the column arrives through the untested `ALTER` path above.

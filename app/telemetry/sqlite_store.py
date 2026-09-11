@@ -9,6 +9,7 @@ the other. This is the store the demo runs on; `SnowflakeLedgerStore` is the sam
 interface against the real warehouse.
 
 Writes go through a thread so an fsync never lands in the request path.
+`execute` is the one-statement surface `app/telemetry/lifecycle.py` runs on.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from app.telemetry import migrate
 
 
 class SqliteLedgerStore:
+    dialect = "sqlite"
+
     def __init__(self, path: str | Path = "data/ledger.db") -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,6 +42,31 @@ class SqliteLedgerStore:
 
     async def _run(self, fn, *args):
         return await asyncio.to_thread(fn, *args)
+
+    async def execute(
+        self, sql: str, params: Sequence[Any] = ()
+    ) -> tuple[list[dict[str, Any]], int]:
+        """One statement, its own transaction. See lifecycle.LifecycleBackend.
+
+        Not under `self._lock` — that serialises this store's multi-statement
+        writes, and a single statement serialises on SQLite's write lock. Not
+        `_connect()` either: its default isolation level opens a transaction
+        before a write, and a write that meets another writer inside an open
+        transaction gets SQLITE_BUSY at once; in autocommit the statement is the
+        transaction and the write retries on the busy timeout, the same path
+        BEGIN IMMEDIATE takes.
+        """
+
+        def go():
+            conn = sqlite3.connect(self.path, timeout=10.0, isolation_level=None)
+            conn.row_factory = sqlite3.Row
+            try:
+                cur = conn.execute(sql, params)
+                return [dict(r) for r in cur.fetchall()], cur.rowcount
+            finally:
+                conn.close()
+
+        return await self._run(go)
 
     # -- LedgerStore -------------------------------------------------------
 
@@ -231,14 +259,14 @@ class SqliteLedgerStore:
                     """INSERT OR REPLACE INTO ablation_results
                        (ablation_id, memory_id, user_id, ts, prompt, baseline_answer,
                         ablated_answer, similarity, verdict, tokens_saved,
-                        monthly_cost_usd)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        monthly_cost_usd, probes_tested)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         row["ablation_id"], row["memory_id"], row["user_id"], row["ts"],
                         row.get("prompt"), row.get("baseline_answer"),
                         row.get("ablated_answer"), row.get("similarity"),
                         row.get("verdict"), row.get("tokens_saved"),
-                        row.get("monthly_cost_usd"),
+                        row.get("monthly_cost_usd"), row.get("probes_tested"),
                     ),
                 )
 

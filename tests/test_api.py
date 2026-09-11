@@ -7,6 +7,8 @@ the cost" is something the build checks rather than something we hope for at
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import json
 import re
 from pathlib import Path
@@ -511,3 +513,71 @@ async def test_the_spa_route_will_not_serve_a_file_outside_the_dist_directory():
 
     response = await main.spa("../../requirements.txt")
     assert Path(response.path).name == "index.html"
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: the seam T3.1 wired (.sol/requests/q2-lifecycle-route.md)
+# ---------------------------------------------------------------------------
+
+
+async def _evidence_for_eviction(store, memory_id: str, user_id: str) -> None:
+    """A ledger that has seen `memory_id` injected for `user_id` and holds an
+    `evict` verdict against it — what makes a memory a proposal."""
+    from app.contracts import CallRecord, InjectionRecord
+
+    ts = "2026-09-10T12:00:00Z"
+    await store.upsert_memories([{
+        "memory_id": memory_id, "user_id": user_id, "memory_type": "fact",
+        "content_hash": "0" * 16, "tier": 3, "stable_calls": 0, "tokens": 40,
+    }])
+    await store.record_call(
+        CallRecord(
+            call_id=f"call_{memory_id}", session_id="s", user_id=user_id, ts=ts, mode="tiered",
+            model="sim", input_tokens=100, output_tokens=10, cached_tokens=0,
+            cache_write_tokens=0, cost_usd=0.01, cost_uncached_usd=0.01, cost_cached_usd=0.0,
+            cost_write_usd=0.0, cost_output_usd=0.0, latency_ms=1.0, breakpoint_count=0,
+        ),
+        [InjectionRecord(
+            call_id=f"call_{memory_id}", memory_id=memory_id, user_id=user_id, ts=ts, tier=3,
+            memory_type="fact", tokens=40, was_cached=False, attributed_cost_usd=0.01,
+        )],
+    )
+    await store.record_ablation({
+        "ablation_id": f"abl_{memory_id}", "memory_id": memory_id, "user_id": user_id,
+        "ts": ts, "similarity": 1.0, "verdict": "evict", "tokens_saved": 40,
+        "monthly_cost_usd": 0.0, "probes_tested": 25,
+    })
+
+
+def test_the_lifecycle_proposals_route_requires_a_key(client):
+    del client.headers["X-API-Key"]
+    assert client.get("/api/lifecycle/proposals").status_code == 401
+
+
+def test_the_lifecycle_proposals_route_ignores_a_user_id_query_parameter(client):
+    service = service_module.get_service()
+    # The registry rows were written just now; the age gate would hide them.
+    service.settings = dataclasses.replace(service.settings, lifecycle_min_age_days=0)
+    asyncio.run(_evidence_for_eviction(service.ledger, "mem_maya_fact", "stu_maya_chen"))
+    asyncio.run(_evidence_for_eviction(service.ledger, "mem_liam_fact", "stu_liam_ortiz"))
+
+    proposals = client.get("/api/lifecycle/proposals?user_id=stu_liam_ortiz").json()
+    assert [p["memory_id"] for p in proposals] == ["mem_maya_fact"]
+    assert proposals[0]["user_id"] == "stu_maya_chen"
+    assert proposals[0]["probes_tested"] == 25
+    # Control: the other tenant's proposal exists and is reachable with its own key.
+    liam = client.get("/api/lifecycle/proposals", headers={"X-API-Key": "liam-key"}).json()
+    assert [p["memory_id"] for p in liam] == ["mem_liam_fact"]
+
+
+def test_the_same_turn_sent_twice_writes_one_episode(client):
+    def episodes(text: str) -> int:
+        stored = client.get("/api/memories").json()
+        return sum(m["content"] == f"Student asked: {text}" for m in stored)
+
+    send(client, "help with moles", session="dup-1")
+    send(client, "help with moles", session="dup-2")
+    assert episodes("help with moles") == 1
+    # Control: a different turn inside the same window is still written.
+    send(client, "help with quadratics", session="dup-3")
+    assert episodes("help with quadratics") == 1

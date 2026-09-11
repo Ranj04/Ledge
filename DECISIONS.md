@@ -1082,3 +1082,68 @@ carries `probes_tested`, both stores ignore a key their column list lacks, and
 `tests/test_lifecycle.py` shows the `None` and the `25` on either side of an `ALTER TABLE`. The
 proposal's `reason` says "over 25 probes" or "over an unrecorded probe count", so a reader of
 the route sees which it is. Rows recorded before the column will stay `None`, correctly.
+
+### D40 — 2026-09-10 — T3.1: the seam, a ceiling re-derived from a measurement, and what "one test change" turned out to be
+
+**The failing gate test was a stale constant, fixed by measuring.**
+`tests/test_limits.py::test_one_principals_spend_does_not_count_against_another` pinned
+`SPEND_CEILING_USD="0.007"`, calibrated against the pre-Q1 bullet format. Measured through
+`SpendCeiling.reserve` on this tree: one tiered turn against the seeded corpus is a ~5,461-token
+prompt, reserves **$0.0252** (prompt tokens at the cache-write rate plus 960 output tokens), has a
+floor of $0.0109, and reconciles to ~$0.015 once billed. $0.007 sat below even the floor, so the
+first call was refused and the test failed for a reason unrelated to its intent. The ceiling is now
+**$0.03**: one reservation fits and a second on the same key ($0.015 measured + $0.025 reserved)
+does not — and the test now *asserts* that refusal as a control, so the constant cannot drift into
+slack unnoticed. The derivation sits in the test beside the constant.
+`tests/review/test_trackp_round1.py`'s failed-call test pinned $0.02 for the same reason and is
+derived the same way.
+
+**The 21 red reviewer tests were 20 + 1, and the 1 was not where the brief said.**
+`test_tracka_round1.py`'s 20 were one parametrised test asserting the `- ` prefix Q1 replaced.
+Updated to the element format rather than retired: the hostile inputs are worth keeping live against
+the current renderer and the invariant — one line, no forged header, one parsed memory — is
+unchanged; `tests/test_injection.py` stays the deep coverage. `test_t1_documentation.py` was already
+green; the 21st was `test_trackp_round1.py::test_a_failed_provider_call_does_not_count_against_the_spend_ceiling`,
+the ceiling case above.
+
+**Track Q's claim about the adopt test held; its proposed fix did not; "one test change" was six.**
+Verified by landing `0002` as specified and running the suite. `apply(...) == []` after adopting
+`0001` cannot hold once a second version exists — Q was right. But `apply(...) == VERSIONS[1:]`
+also failed as written: the test's degenerate one-column tables (`ablation_id TEXT`) do not match the
+declared key, so `0002`'s re-declaration of `ablation_results` was not widenable and `apply` raised
+`SchemaMismatch`. The degenerate tables now carry their key as declared (`TEXT PRIMARY KEY`); adopt
+still reports every other column missing, `apply` then applies `0002` alone, and `call_log` is
+asserted untouched afterwards. The other five: the module flattened every migration's `TABLES`,
+creating `ablation_results` twice and comparing 0001's shape against the widened table (now
+`INITIAL` = 0001's tables, `TABLES` = the last declaration per name); the Snowflake fake built a
+table's shape by *name*, ambiguous once two versions declare it (now keyed by the exact DDL text);
+Sol's idempotence test hard-coded `["0001_initial"]`; and `test_lifecycle`'s manual `ALTER TABLE ADD
+COLUMN probes_tested` collided with the real column (now: a row recorded with the count reads back
+25, one recorded without reads back None). And `migrate.load_migrations()[0]` inside `0002` recurses
+— it loads `0002` — so `0002` loads `0001` by path through `migrate.load_migration`.
+
+**Snowflake is now widened too, for nullable columns only.** D38 left Snowflake never widened by
+`apply`. With `0002` re-declaring `ablation_results`, every *fresh* Snowflake account would have
+failed startup between 0001 and 0002 until someone ran an `ALTER` in Snowsight — a manual step the
+system imposed on itself. `_reconcile` now adds the missing columns with
+`ALTER TABLE ... ADD COLUMN` when every one of them is nullable (ADD COLUMN cannot supply a NOT NULL
+value for existing rows), one statement each in declaration order, then re-reads `DESC TABLE` before
+recording, so the order check still applies. Anything else is still raised. Never run against a real
+account (`VERIFY-AT-EVENT` on `_add_columns`); tested positive and negative against the fake cursor.
+
+**The adapters are gone.** Both stores carry `execute`/`dialect`, so `lifecycle._Sqlite`,
+`_Snowflake`, `_snowflake_ready` and `_backend` are deleted and the lifecycle calls the store. The
+Snowflake `VERIFY-AT-EVENT` moved with the code to `SnowflakeLedgerStore.execute`; the per-call
+`CREATE TABLE IF NOT EXISTS` went with the adapters, since `0002` owns the tables now.
+
+**The registry's token count was a wrong number.** `_persist` and `/api/memories` counted
+`f"- {content}\n"`, the pre-Q1 format, ~20 tokens under what the prompt carries per memory. Both
+now use `assemble.rendered_tokens` — the assembler's own helper, made public (`memory_tokens`
+collides with a local in `assemble()`) — so `memory_registry.tokens` is the number the prompt
+actually carries.
+
+**Requests.** `q2-lifecycle-route.md`, `q2-lifecycle-store-methods.md`: actioned, resolution
+appended to each. `trackp-test-api-auth.md`: done inside Track P, noted in the file.
+`trackc-repo-rename.md`: closed by Ranjiv, already recorded. The Stage 1 files (`tracka-*`,
+`trackb-*`, `trackc-doc-moves`) were actioned in T1 — D33 is amended and `docs/history/` exists —
+and are left as the record.
