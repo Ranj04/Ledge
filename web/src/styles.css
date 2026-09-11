@@ -1,6 +1,6 @@
 :root {
   color-scheme: dark;
-  font-family: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-size: 15px;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -24,10 +24,12 @@
   --tier-2: #f0a34a;
   --tier-3: #8f97b8;
 
-  /* Type system. Outfit for display, Instrument Sans for body, mono for every measured figure. */
-  --font-display: 'Outfit', ui-sans-serif, system-ui, sans-serif;
-  --font-body: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Type system: system faces only. The README promises the app makes no network request once
+     the tokenizer table is cached, and a Google Fonts <link> was the one thing that broke that
+     promise. Display and body share the sans stack; mono for every measured figure. */
+  --font-display: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   font-variant-numeric: tabular-nums;
 }
 

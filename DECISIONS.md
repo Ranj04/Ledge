@@ -1594,3 +1594,54 @@ is generated, not seeded — so every fresh clone starts empty and the old order
 **The CI badge.** Added only because the workflow has now executed and passed. A badge on a
 workflow that had never run would have been the kind of claim this repository exists not to make.
 It says nothing about coverage, because there is no coverage gate.
+
+### D47 — 2026-09-10 — T5 round 2: the offline claim is now true, not narrowed
+
+**What was wrong.** The T5 README opens with "no credentials, and no network once the tokenizer
+table is cached" and the quickstart says "Everything else is offline." Sol's review test
+(`tests/review/test_t5_portfolio_claims.py`) showed the built SPA requesting three font families
+from `fonts.googleapis.com` and `fonts.gstatic.com` at page load. Sol had seen those fonts in T0's
+review and correctly judged them below the bar for a finding — nothing claimed offline operation
+then. The fact did not change; what the repository asserted about it did. That is the shape of
+error this project exists to avoid, and it was mine.
+
+**The choice: make the claim true rather than narrow it.** "Clone it and it runs with no
+credentials and no network" is the strongest sentence in the README and is worth more than a
+typeface. The remote `<link>`s are gone from `web/index.html` and the four font declarations in
+`web/src/styles.css` are system stacks (`ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+Roboto, "Helvetica Neue", Arial, sans-serif`; `ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+Consolas, "Liberation Mono", monospace`). Self-hosting the three families was the alternative;
+it would add roughly 200–400 KB of woff2 to a 249 KB bundle for a demo dashboard, and the
+Google faces were already declared *with these same system fallbacks behind them*, so any viewer
+without them installed was already seeing the system rendering. The display face (Outfit, weight
+300 on `h1`/`h2`/`.hero-cost`) is the one visible loss; the layout reads the same.
+
+**Bundle:** `web/dist` 252K → 249K. CSS 24,691 → 24,797 bytes (longer stacks), JS byte-identical
+at 223,767, `index.html` lost six lines. `grep -rc "fonts.googleapis\|fonts.gstatic"` is 0 in
+`web/index.html`, `web/dist/index.html` and all of `web/src/`. The remaining `http` strings in
+the built output are XML namespace identifiers (`w3.org/2000/svg` and kin) and React's
+error-decoder URL inside an error-message string — neither is fetched.
+
+**Every other absolute claim in the README, checked by asking what happens with the cable out:**
+- *"no network once the tokenizer table is cached"* — `app/cortex/tokens.py` catches the
+  `tiktoken` fetch failure and prints the offline fix (`TIKTOKEN_CACHE_DIR`). Holds.
+- *"Everything else is offline"* — the default providers are `CORTEX_PROVIDER=sim`,
+  `EVEROS_PROVIDER=sim`, `LEDGER_PROVIDER=sqlite` (`app/config.py`); `service.startup()` only
+  runs `ledger.init_schema()`; the only network clients (`openai_client.py`, `everos/real_client.py`,
+  `snowflake_store.py`) are constructed only when their provider is selected. Holds now that
+  the fonts are gone.
+- *`experiment.py --runs 4 --record`* in the quickstart — the default `ABLATION_SCORER` is the
+  lexical scorer; the embedding scorer is opt-in (`ablation/similarity.py`). Holds.
+- *"No credentials needed — … the UI says on screen whether the provider is a simulator"* —
+  `web/src/App.tsx:132` renders a `SIMULATED PROVIDERS` chip from the `providers` block in
+  `app/api/routes.py:57`. Holds.
+- *"EverOS runs self-hosted alongside (free, no per-operation charge, and no network hop)"* —
+  the request path is `localhost:8077`; building or pulling the image needs the network once,
+  as `npm install` and `pip install` do. Opt-in and clearly in a separate "for the real memory
+  layer" paragraph. Holds as written.
+- *"281 tests pass in CI … the 75 adversarial tests pass locally"* — 281 held; 75 was stale the
+  moment Sol committed his test. Now **76**, in both places the README states it.
+
+**Ownership note.** `web/` is Sol's directory. The round-2 instruction named the fix, the files
+and the grep target, and the change is six lines in two files; spawning a Sol task for it would
+have added a round-trip to a two-minute edit. Recorded here so the crossing is visible.

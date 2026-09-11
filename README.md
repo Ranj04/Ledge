@@ -29,7 +29,7 @@ stays cacheable, and keeps a ledger of what each memory costs per month.
   measurement rather than the design.
 
 Clone to running takes about a minute — no credentials, and no network once the tokenizer table is
-cached. **281 tests** pass in CI on every push; the **75** adversarial tests pass locally.
+cached. **281 tests** pass in CI on every push; the **76** adversarial tests pass locally.
 
 The repository is named `Ledge`; the Python distribution is `memoryledger`. The study tutor it
 runs under is the demo surface, not the product: it exists so there is a person to care about and
@@ -281,7 +281,7 @@ nothing caches unless a breakpoint says so, placement is load-bearing and the br
 
 ```bash
 .venv/bin/python -m pytest -q --ignore=tests/review   # 281 passed — the CI gate, measured 2026-09-10
-.venv/bin/python -m pytest -q tests/review            # 75 passed — the cross-model review tests, run locally
+.venv/bin/python -m pytest -q tests/review            # 76 passed — the cross-model review tests, run locally
 ```
 
 ## Running against real providers
