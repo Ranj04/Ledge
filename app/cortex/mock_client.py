@@ -29,10 +29,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
-import re
 import time
 from collections.abc import AsyncIterator
 
+from app.assembler.assemble import SIGIL
 from app.config import get_settings
 from app.contracts import AssembledPrompt, InferenceResult, StreamEvent, Usage
 from app.cortex.cache_sim import PromptCacheSimulator, flatten_prompt
@@ -175,56 +175,47 @@ class MockCortexClient:
 
 
 def _read_prompt(prompt: AssembledPrompt) -> tuple[list[str], str]:
-    """Recover the memory bodies and the student's question from the text.
+    """Recover the memory bodies and the student's question.
 
-    Deliberately done by parsing rather than by reading `prompt.injected`: the
-    simulator is standing in for something that only has the rendered prompt,
-    and parsing keeps it honest about what information it is allowed to use.
+    Bodies are parsed from the rendered text rather than read off
+    `prompt.injected`: the simulator is standing in for something that only
+    has the prompt, and parsing keeps it honest about what information it is
+    allowed to use.  The *boundary* between memory text and the question is
+    not parsed, though -- it is structure the assembler wrote.  The final user
+    turn is either the question alone or a list of content parts whose last
+    part is the question (`assemble._final_turn`), so the question is returned
+    verbatim and never scanned.  Before this, a question containing what looked
+    like a memory region was reclassified as memory and emptied
+    (`tests/review/test_s3_round1.py`); no parser can tell assembler-emitted
+    structure from content that merely resembles it, so the parser is not
+    asked to.
     """
     memories: list[str] = []
     for block in prompt.system_blocks:
         memories.extend(_memory_lines(block.text))
 
-    query_parts: list[str] = []
-    for msg in prompt.messages[-1:]:
-        content = msg["content"]
-        text = content if isinstance(content, str) else "".join(
-            p.get("text", "") for p in content
-        )
-        memories.extend(_memory_lines(text))
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped and not (
-                _MEMORY_ELEMENT.match(stripped) or stripped.startswith(("## ", "### "))
-            ):
-                query_parts.append(stripped)
+    content = prompt.messages[-1]["content"]
+    parts = [content] if isinstance(content, str) else [p.get("text", "") for p in content]
+    *memory_parts, question = parts
+    for part in memory_parts:
+        memories.extend(_memory_lines(part))
 
     # Sorted so the composer cannot depend on layout order.
-    return sorted(set(body for _, body in memories)), " ".join(query_parts)
+    return sorted(set(memories)), question
 
 
-# Exactly the element `assemble._render` emits, anchored to the whole line.
-# Attribute order fixed; the body can hold no raw `<` or `>` because the
-# renderer escapes them, so the greedy `.*` cannot run past a forged close tag.
-_MEMORY_ELEMENT = re.compile(
-    r'<memory id="([^"]*)" type="([^"]*)" origin="(agent|user)">(.*)</memory>$'
-)
+def _memory_lines(text: str) -> list[str]:
+    """The body of every memory in assembler-emitted memory text, in order.
 
-
-def _memory_lines(text: str) -> list[tuple[str, str]]:
-    """`(memory_id, body)` for every well-formed memory element, in text order.
-
-    Anything that is not a whole-line, well-formed element is not a memory.
-    The previous parser treated any line starting `- ` as one, which is exactly
-    the re-parse a hostile memory exploited. The body is unescaped so the
-    composer sees the memory's real content, as a model would.
+    A memory is a line beginning with one of the two provenance marks; the
+    body is unescaped so the composer sees the real content, as a model would.
+    Headers, blank lines and the system prompt's prose are not memories. Only
+    call this on text the assembler emitted as memory text -- never on the
+    question, which is why `_read_prompt` keeps the two apart.
     """
-    out: list[tuple[str, str]] = []
-    for ln in text.splitlines():
-        match = _MEMORY_ELEMENT.match(ln.strip())
-        if match:
-            out.append((html.unescape(match.group(1)), html.unescape(match.group(4))))
-    return out
+    return [
+        html.unescape(ln[2:]) for ln in text.splitlines() if ln[:2] in SIGIL.values()
+    ]
 
 
 # ---------------------------------------------------------------------------

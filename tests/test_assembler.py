@@ -56,6 +56,12 @@ def reg() -> TierRegistry:
     return TierRegistry(stability_n=3)
 
 
+def _text(msg: dict) -> str:
+    """A message's text as the model reads it: parts concatenated."""
+    c = msg["content"]
+    return c if isinstance(c, str) else "".join(p["text"] for p in c)
+
+
 def test_a_memory_containing_newlines_renders_as_exactly_one_line():
     hostile = Memory(
         memory_id="mem_x",
@@ -133,7 +139,7 @@ def test_both_modes_carry_the_same_memory_text(memories):
         for msg in prompt.messages:
             c = msg["content"]
             text += c if isinstance(c, str) else "".join(p["text"] for p in c)
-        return {body for _, body in _memory_lines(text)}
+        return set(_memory_lines(text))
 
     naive = assemble(memories, user_message="q", mode="naive")
     tiered = assemble(memories, user_message="q", mode="tiered", registry=reg(), now=NOW)
@@ -204,7 +210,7 @@ def test_tier_2_rides_behind_the_conversation_history(memories):
     prompt = assemble(memories, user_message="q", history=history, mode="tiered",
                       registry=reg(), now=NOW)
 
-    final = prompt.messages[-1]["content"]
+    final = _text(prompt.messages[-1])
     assert "balance equations in acidic solution" in final, "tier 2 is in the last turn"
     assert all("acidic solution" not in b.text for b in prompt.system_blocks)
 
@@ -285,7 +291,7 @@ def test_volatile_memories_sit_after_the_history_breakpoint(memories):
     history = [{"role": "user", "content": "earlier"}]
     prompt = assemble(memories, user_message="q", history=history, mode="tiered",
                       registry=reg(), now=NOW)
-    final = prompt.messages[-1]["content"]
+    final = _text(prompt.messages[-1])
     assert "On 2026-08-01" in final
     assert all("On 2026-08-01" not in b.text for b in prompt.system_blocks)
 

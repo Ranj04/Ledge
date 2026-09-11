@@ -101,32 +101,42 @@ among them.
 
 ### What the provenance delimiter did to the numbers (simulator, 2026-09-10)
 
-Stage 2 changed the text sent to the model: every memory now renders as a
-`<memory id type origin>` element instead of a `- ` bullet (`DECISIONS.md` D41). The live
-**42.9%** headline was measured on **2026-08-07** against the bullet format and has **not** been
-re-measured live — there is no `OPENAI_API_KEY` on the build machine. The simulator was run
-against both formats on the same corpus and the same scripted conversations, 3 × 4 runs each;
-the provenance delimiter is the only difference between the two columns.
+The text sent to the model has changed three times. Stage 2 rendered every memory as a
+`<memory id type origin>` element instead of a `- ` bullet (`DECISIONS.md` D41); Stage 3 moved
+the provenance to one `<tutor_notes>` / `<observations>` wrapper per region (D42); Stage 4 put
+it on the first character of each line — `- ` for the tutor's own notes, `> ` for what was
+recorded from the student — so it costs the same however the memories are ordered (D43). The
+live **42.9%** headline was measured on **2026-08-07** against the plain bullet format and has
+**not** been re-measured live — there is no `OPENAI_API_KEY` on the build machine. The
+simulator was run against all four formats on the same corpus and the same scripted
+conversations, 3 × 4 runs each; the markup is the only difference between the columns.
 
-| input-side, per conversation | `- ` bullets, 2026-09-10 ([`results/2026-09-10-simulator.json`](results/2026-09-10-simulator.json)) | `<memory>` elements, 2026-09-10 ([`results/2026-09-10-simulator-stage2.json`](results/2026-09-10-simulator-stage2.json)) | change |
-|---|---|---|---|
-| **cost, naive** | **$0.05115** | **$0.08207** | **+60.5%** |
-| **cost, tiered** | **$0.02437** | **$0.03873** | **+58.9%** |
-| reduction, mean (naive → tiered) | 52.35% | 52.81% | +0.47 pt |
-| cache hit rate, tiered | 61.88% | 62.56% | +0.67 pt |
-| prompt tokens, naive | 25,574 | 41,035 | +60.5% |
-| prompt tokens, tiered | 25,686 | 41,504 | +61.6% |
-| total cost incl. output, naive / tiered | $0.06306 / $0.03629 | $0.09399 / $0.05064 | +49.0% / +39.6% |
+| input-side, per conversation | `- ` bullets ([`results/2026-09-10-simulator.json`](results/2026-09-10-simulator.json)) | `<memory>` elements ([`…-stage2.json`](results/2026-09-10-simulator-stage2.json)) | region wrappers ([`…-stage3.json`](results/2026-09-10-simulator-stage3.json)) | per-line marks ([`…-stage4.json`](results/2026-09-10-simulator-stage4.json)) | stage 4 vs bullets |
+|---|---|---|---|---|---|
+| **cost, naive** | **$0.05115** | **$0.08207** | **$0.05231** | **$0.05206** | **+1.8%** |
+| **cost, tiered** | **$0.02437** | **$0.03873** | **$0.02497** | **$0.02461** | **+1.0%** |
+| reduction, mean (naive → tiered) | 52.35% | 52.81% | 52.26% | 52.72% | +0.37 pt |
+| cache hit rate, tiered | 61.88% | 62.56% | 62.06% | 62.30% | +0.41 pt |
+| prompt tokens, naive | 25,574 | 41,035 | 26,155 | 26,029 | +1.8% |
+| prompt tokens, tiered | 25,686 | 41,504 | 26,414 | 26,141 | +1.8% |
+| total cost incl. output, naive / tiered | $0.06306 / $0.03629 | $0.09399 / $0.05064 | $0.06423 / $0.03689 | $0.06397 / $0.03653 | +1.4% / +0.7% |
 
-**Read the dollars, not the percentage.** The reduction went *up* by half a point and the
-bill went *up* by 59%. The element adds ~21 tokens to each of the ~104 memories a turn
-retrieves (~2,200 tokens per call). 78 of those memories are stable and sit in the cached
-prefix, so most of the new tokens are billed at the cache-read rate in `tiered` and at the
-full rate in `naive` — which raises the *fraction* saved while raising the *amount* paid in
-both modes. What the tokens bought is `tests/test_injection.py`: 29 hostile memories, 61
-tests, none of which can forge a header, close its own element, or pass as an instruction.
-That is the trade, stated here beside the old number rather than behind a percentage that
-moved in the opposite direction from the truth.
+**Read the dollars, not the percentage.** Stage 2's reduction went *up* by half a point while
+the bill went *up* by 59%: the element added ~21 tokens to each of the ~104 memories a turn
+retrieves (~2,200 tokens per call), and because 78 of those memories sit in the cached prefix,
+most of the new tokens were billed at the cache-read rate in `tiered` and at the full rate in
+`naive` — which raises the *fraction* saved while raising the *amount* paid in both modes.
+Stage 4 recovers 97–98% of that rise. What is left over bullets is one thing: a 65-token
+paragraph in the system prompt that tells the model what the two marks mean (tier 0, so
+cached after the first turn) — the +455 prompt tokens per 7-turn conversation in *both* modes
+is that paragraph and nothing else. The mark itself costs exactly what the original `- `
+bullet cost: `-` and `>` are one `cl100k_base` token each and the rest of the line tokenises
+identically under either, so memory tokens on a first turn are 3,019 under Stage 1 and 3,019
+under Stage 4. That is also why `naive` can keep its defining global relevance order (Stage
+3's wrappers had made that order cost 94 lines a turn, and D42 had bent the baseline to avoid
+paying it). What the markup buys is unchanged: `tests/test_injection.py`, 29 hostile memories,
+70 tests, none of which can forge a header, wear the other side's mark, or pass as an
+instruction — and, since Stage 4, the student's question cannot be re-read as a memory either.
 
 **The hit rate is measured against the whole prompt.** `cache_hit_rate` is `cached_tokens / input_tokens`, and `input_tokens` is the *total* prompt — cached, written, and the current turn, which can never be cached. Dividing by the cacheable region instead would produce a larger number; this is the conservative framing and `/api/chat` and the session totals use it identically.
 
@@ -150,10 +160,10 @@ Two kinds of measurement appear in this document, and each carries its own prove
   **Live.** Measured against real OpenAI responses (`gpt-5.6-terra`) on **2026-08-07**. The JSON
   artifact of that run was not retained (`BLOCKERS.md`, "No live `results/*.json` artifact exists"),
   and there is no `OPENAI_API_KEY` on the build machine to reproduce it.
-- **The Stage 1 vs Stage 2 comparison table** ("What the provenance delimiter did to the numbers").
-  **Simulator.** Both columns come from `CORTEX_PROVIDER=sim` runs on 2026-09-10, both committed —
-  `results/2026-09-10-simulator.json` and `results/2026-09-10-simulator-stage2.json` — and neither
-  is a live measurement.
+- **The Stage 1 / 2 / 3 comparison table** ("What the provenance delimiter did to the numbers").
+  **Simulator.** All three columns come from `CORTEX_PROVIDER=sim` runs on 2026-09-10, all
+  committed — `results/2026-09-10-simulator.json`, `…-stage2.json` and `…-stage3.json` — and
+  none is a live measurement.
 
 In both cases `cached_tokens` is **derived**, never assigned: on a live call it is read off
 `usage.prompt_tokens_details` in the API response; offline it comes from the simulator's prefix
@@ -188,7 +198,7 @@ not writes, so `app/cortex/openai_client.py` reports `cache_write_tokens` as zer
 guessing. Writes bill at 1.25× and land on tokens *not* served from cache — which is the naive
 baseline, at 0.0% cached. Counting them would widen the gap, so the 2026-08-07 live 42.9% is a floor
 (`BLOCKERS.md`). The simulator does derive write tokens (`app/cortex/cache_sim.py`) and prices them
-at the write rate, so the Stage 1 / Stage 2 simulator table already includes them.
+at the write rate, so the Stage 1 / 2 / 3 simulator table already includes them.
 
 ## Is the baseline fair?
 

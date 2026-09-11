@@ -306,9 +306,15 @@ def test_inspect_accounts_for_every_memory_exactly_once_in_both_modes(client):
     assert naive_final["memory_ids"] == []
     assert naive_final["label"] == "user message"
 
+    # The question is its own content part, so it is the last entry in both
+    # modes and carries nothing; the volatile band is the entry before it.
     tiered_final = body["modes"]["tiered"]["messages"][-1]
-    assert tiered_final["carries_tiers"] == [2, 3]
-    assert tiered_final["memory_ids"], "the volatile band must name what it holds"
+    assert tiered_final["carries_tiers"] == []
+    assert tiered_final["memory_ids"] == []
+    assert tiered_final["label"] == "user message"
+    tiered_band = body["modes"]["tiered"]["messages"][-2]
+    assert tiered_band["carries_tiers"] == [2, 3]
+    assert tiered_band["memory_ids"], "the volatile band must name what it holds"
 
 
 def test_the_inspectors_token_total_matches_what_the_simulator_bills(client):

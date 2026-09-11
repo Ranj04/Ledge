@@ -386,11 +386,9 @@ def _message_label(role: str, carries: list[int]) -> str:
     span = (
         "–".join(str(t) for t in (carries[0], carries[-1])) if len(carries) > 1 else str(carries[0])
     )
-    return (
-        f"Tiers {span} + question · {names}"
-        if len(carries) > 1
-        else (f"Tier {span} + question · {names}")
-    )
+    # The question is its own part now (`assemble._final_turn`), labelled as a
+    # plain user message by the branch above.
+    return f"Tiers {span} · {names}" if len(carries) > 1 else f"Tier {span} · {names}"
 
 
 def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
@@ -439,8 +437,11 @@ def _describe(prompt: AssembledPrompt, min_cacheable: int) -> dict[str, Any]:
             text = prefix + part.get("text", "")
             tokens = count_tokens(text)
             cumulative += tokens
-            # Only the final user turn carries memory content.
-            carries = message_tiers if msg is prompt.messages[-1] else []
+            # Only the final user turn carries memory content, and within it
+            # only the parts before the last: the question is its own part.
+            carries = (
+                message_tiers if msg is prompt.messages[-1] and j < len(parts) - 1 else []
+            )
             messages.append(
                 {
                     "index": index,

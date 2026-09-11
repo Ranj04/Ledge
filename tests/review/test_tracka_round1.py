@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from ablation.harness import evaluate_memory, verdict_for
-from app.assembler.assemble import _block_text, _render, assemble
+from app.assembler.assemble import SIGIL, _block_text, _render, assemble
 from app.assembler.tiering import TierRegistry
 from app.config import make_cortex_client, make_everos_client
 from app.contracts import Memory
@@ -58,9 +58,11 @@ def test_render_is_one_line_for_every_hostile_input(content: str) -> None:
     assert rendered.endswith("\n")
     assert len(rendered.splitlines()) == 1
     # Q1 (05c8957) replaced the `- ` bullet with one `<memory>` element per
-    # memory; the invariant is unchanged. tests/test_injection.py covers the
-    # element's well-formedness in depth; this keeps the hostile set here live.
-    assert rendered.startswith("<memory ") and rendered.endswith("</memory>\n")
+    # memory; Stage 3 put the provenance on a region wrapper; Stage 4 put it
+    # on the line's first character (`- ` agent, `> ` user). The invariant is
+    # unchanged throughout. tests/test_injection.py covers the mark and
+    # header structure in depth; this keeps the hostile set here live.
+    assert rendered[:2] in SIGIL.values() and rendered.endswith("\n")
 
     block = _block_text("## Recent sessions", [_mem(content)])
     assert len(_memory_lines(block)) <= 1
