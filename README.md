@@ -90,11 +90,11 @@ CORTEX_PROVIDER=openai .venv/bin/python scripts/experiment.py --runs 4
   prompt size   naive 28,425 tok   tiered 28,530 tok   (same content, different layout)
 ```
 
-**Live — real OpenAI, `gpt-5.6-terra`, measured 2026-08-07.** The figures above come from live OpenAI responses.
-The 42.9% mean reduction, the 47.9% `tiered` hit rate and the 0.0% `naive` hit rate in that headline
-block were read off `usage.prompt_tokens_details` in real API responses. The JSON artifact of that run
-was not retained (`BLOCKERS.md`, "No live `results/*.json` artifact exists"), and there is no
-`OPENAI_API_KEY` on the build machine to re-run it.
+**Live — real OpenAI, `gpt-5.6-terra`, measured 2026-08-07.** The 42.9% mean reduction, the 47.9%
+`tiered` hit rate and the 0.0% `naive` hit rate in that headline block were read off
+`usage.prompt_tokens_details` in real API responses. The JSON artifact of that run was not retained
+(`BLOCKERS.md`, "No live `results/*.json` artifact exists"), and there is no `OPENAI_API_KEY` on the
+build machine to re-run it.
 
 Machine-readable runs: [`results/`](results/) — simulator runs only; the 2026-08-07 live run is not
 among them.
