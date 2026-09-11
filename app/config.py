@@ -92,7 +92,7 @@ class Settings:
     snowflake_pat: str = field(default_factory=lambda: _env("SNOWFLAKE_PAT"))
     cortex_base_url_override: str = field(default_factory=lambda: _env("CORTEX_BASE_URL"))
     cortex_model: str = field(
-        default_factory=lambda: _env("CORTEX_MODEL", "claude-sonnet-4-5")
+        default_factory=lambda: _env("CORTEX_MODEL", "claude-sonnet-5")
     )
 
     # OpenAI — inference, since the Snowflake trial carries no Cortex

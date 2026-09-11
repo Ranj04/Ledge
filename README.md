@@ -4,44 +4,52 @@
 
 **An agent that remembers more should not cost more.**
 
-An agent's prompt is rebuilt every turn — instructions, retrieved memories, the new message — and
-prompt caching only pays when the *front* of the prompt is byte-identical to the previous call.
-Retrieval changes the front every turn, so the more an agent remembers, the more every turn costs.
+Prompt caching only pays when the *front* of the prompt is byte-identical to the previous call.
+An agent's prompt is rebuilt every turn, and memory retrieval puts a freshly ranked block near the
+front — so every turn misses, and the more an agent remembers, the more each turn costs.
 MemoryLedger orders retrieved memories by how often they change, so the stable part of the prompt
 stays cacheable, and keeps a ledger of what each memory costs per month.
 
-- **Measured live.** The same memories, re-ordered, cut input-side cost by **42.9%** against real
-  OpenAI responses (`gpt-5.6-terra`, 2026-08-07, `cached_tokens` read off the wire). The baseline
-  had caching switched on too and scored 0.0%.
-- **Measured in dollars, not percentages.** The four prompt formats this repository went through
-  are compared on the same corpus in
-  [the simulator table](#what-the-provenance-delimiter-did-to-the-numbers-simulator-2026-09-10):
-  the one that raised the *reduction* by half a point raised the *bill* by 59%.
-- **Simulated where it has to be, and labelled.** Without an API key the model's replies come from
-  a simulator, and the cache accounting comes from a re-implementation of the provider's billing
-  rule — prefix hashing, breakpoints, TTL — not from a stub. Every file in [`results/`](results/)
-  says which kind it is.
-- **Adversarial.** A 29-case prompt-injection corpus that the memory format defeats
-  (`tests/test_injection.py`), and a separate suite of cross-review tests — this was built by two
-  models, each writing cases to break the other's work (`tests/review/`).
-- **Negative results kept.** `app/cortex/openai_client.py` records that explicit cache breakpoints
-  measured seven points *worse* than implicit caching on OpenAI, and the code follows the
-  measurement rather than the design.
+**Measured live: the same memories, re-ordered, cut input-side cost by 42.9%.** Real OpenAI
+responses, `gpt-5.6-terra`, 2026-08-07, `cached_tokens` read off the wire. The baseline had caching
+switched on too and scored 0.0%. The JSON artifact of that run was not retained;
+[the headline number](#the-headline-number) says exactly what was measured and what was not.
 
-Clone to running takes about a minute — no credentials, and no network once the tokenizer table is
-cached. **281 tests** pass in CI on every push; the **76** adversarial tests pass locally.
+## The whole idea in one picture
 
-The repository is named `Ledge`; the Python distribution is `memoryledger`. The study tutor it
-runs under is the demo surface, not the product: it exists so there is a person to care about and
-so the system generates realistic memory pressure.
+```mermaid
+flowchart LR
+    subgraph naive["naive — memories near the front, in relevance order"]
+        direction TB
+        n1["system prompt<br/><b>cached</b>"]
+        n2["retrieved memories<br/>re-ranked for this question<br/><b>first changed byte → miss</b>"]
+        n3["conversation history<br/><b>miss</b> — behind the change"]
+        n4["the new message<br/><b>miss</b>"]
+        n1 --> n2 --> n3 --> n4
+    end
+    subgraph tiered["tiered — memories ordered by how often they change"]
+        direction TB
+        t1["system + skills · tier 0<br/><b>cached</b>"]
+        t2["profile · tier 1<br/><b>cached</b>"]
+        t3["conversation history<br/>append-only, so the prefix only grows<br/><b>cached</b>"]
+        t4["facts + episodes · tiers 2–3, and the new message<br/><b>first changed byte → miss</b>"]
+        t1 --> t2 --> t3 --> t4
+    end
+```
+
+A cache hit ends at the first byte that differs from an earlier call, and every block after it is
+billed at full price. `naive` changes at its second block, so only the system prompt ever hits.
+`tiered` changes at its fourth, so everything above the final turn hits. Same memories, same
+information, same answer — the only difference is where the churn sits.
 
 ---
 
 ## Run it
 
-Python 3.12 and Node 20. The virtual environment's interpreter is `.venv/bin/python` on macOS and
-Linux and `.venv/Scripts/python.exe` on Windows; every command in this document is written in the
-first form, and the second is a straight substitution.
+Clone to running takes about a minute — no credentials, and no network once the tokenizer table is
+cached. Python 3.12 and Node 20. The virtual environment's interpreter is `.venv/bin/python` on
+macOS and Linux and `.venv/Scripts/python.exe` on Windows; every command in this document is
+written in the first form, and the second is a straight substitution.
 
 ```bash
 python -m venv .venv                          # any Python 3.12; or: uv venv --python 3.12 .venv
@@ -61,6 +69,16 @@ cd web && npm install && npm run build && cd ..
 Open <http://localhost:8000>. No credentials needed — it runs against faithful simulators, and the
 UI says on screen whether the provider is a simulator.
 
+<!-- screenshots: uncomment once the two PNGs exist — docs/screenshots/README.md says how to capture them.
+![The tutor, with the live cost meter and two call receipts for the same question in naive and tiered mode](docs/screenshots/tutor.png)
+*The tutor with the cost meter. Provider: simulator — cache accounting from the billing rule, replies simulated.*
+
+![The per-memory cost dashboard: cost per memory, cache hit rate by tier, eviction candidates](docs/screenshots/dashboard.png)
+*The per-memory cost dashboard, filled by `scripts/experiment.py --record` against the simulator.*
+-->
+*Screenshots: not yet captured. [`docs/screenshots/README.md`](docs/screenshots/README.md) says how
+to produce the two that belong here — the tutor with its cost meter, and the per-memory dashboard.*
+
 `TIKTOKEN_CACHE_DIR` can point at a directory that already holds the BPE blob, for a machine with
 no network at all. Snowflake and the embedding scorer are optional:
 `pip install -r requirements-snowflake.txt`.
@@ -72,6 +90,28 @@ no network hop):
 docker compose up -d everos    # published on host port 8077
 curl localhost:8077/health
 ```
+
+## What a careful reader will find
+
+- **Measured in dollars, not percentages.** The four prompt formats this repository went through
+  are compared on the same corpus in
+  [the simulator table](#what-the-provenance-delimiter-did-to-the-numbers-simulator-2026-09-10):
+  the one that raised the *reduction* by half a point raised the *bill* by 59%.
+- **Simulated where it has to be, and labelled.** Without an API key the model's replies come from
+  a simulator, and the cache accounting comes from a re-implementation of the provider's billing
+  rule — prefix hashing, breakpoints, TTL — not from a stub. Every file in [`results/`](results/)
+  says which kind it is.
+- **Adversarial.** A 29-case prompt-injection corpus that the memory format defeats
+  (`tests/test_injection.py`), and a separate suite of cross-review tests — this was built by two
+  models, each writing cases to break the other's work (`tests/review/`).
+- **Negative results kept.** `app/cortex/openai_client.py` records that explicit cache breakpoints
+  measured seven points *worse* than implicit caching on OpenAI, and the code follows the
+  measurement rather than the design.
+
+**288 tests** pass in CI on every push; the **76** adversarial tests pass locally. The repository is
+named `Ledge`; the Python distribution is `memoryledger`. The study tutor it runs under is the demo
+surface, not the product: it exists so there is a person to care about and so the system generates
+realistic memory pressure.
 
 ## How it works
 
@@ -291,7 +331,7 @@ nothing caches unless a breakpoint says so, placement is load-bearing and the br
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q --ignore=tests/review   # 281 passed — the CI gate, measured 2026-09-10
+.venv/bin/python -m pytest -q --ignore=tests/review   # 288 passed, 1 xfailed — the CI gate, measured 2026-09-10
 .venv/bin/python -m pytest -q tests/review            # 76 passed — the cross-model review tests, run locally
 ```
 

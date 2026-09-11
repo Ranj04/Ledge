@@ -18,3 +18,8 @@ virtual environment. The simulator implements the prompt-caching billing rule ra
 stubbing it, so the paired deltas between the files (`README.md`, "What the provenance
 delimiter did to the numbers"; `DECISIONS.md` D41 and D42) are real measurements of what each format
 costs. What none of them can tell you is the live number.
+
+`providers.model` in a simulator artifact is the configured `CORTEX_MODEL` label, not a model that
+was called — the simulator calls nothing. The four files above carry `claude-sonnet-4-5` because
+that was the default when they were generated; the default is now `claude-sonnet-5`, so a fresh
+`--json` run will carry that label with the same numbers.
