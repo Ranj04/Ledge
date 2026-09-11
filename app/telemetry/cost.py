@@ -20,12 +20,15 @@ Memory costs sum to less than call costs, and that gap is real.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.config import Pricing, get_settings
 from app.contracts import AssembledPrompt, CallRecord, InjectionRecord, Usage
+
+logger = logging.getLogger("memoryledger")
 
 
 @dataclass
@@ -63,14 +66,48 @@ def baseline_cost(usage: Usage, pricing: Pricing | None = None) -> float:
 
 
 def _rate_for_region(
-    end_token: int, usage: Usage, p: Pricing
+    prompt: AssembledPrompt, tier: int, usage: Usage, p: Pricing
 ) -> tuple[float, bool]:
-    """Rate per Mtok for content ending at `end_token`, and whether it was cached."""
-    if end_token <= usage.cached_tokens:
+    """Rate per Mtok for content in `tier`'s region, and whether it was cached.
+
+    The read credit goes through `tier_was_cached`, which tolerates the
+    provider counting the boundary a little short of the app (BOUNDARY_SLACK
+    in app/contracts.py).  The write boundary stays strict: no write has been
+    observed live (OpenAI reports none; Cortex never ran, D28), so there is
+    nothing measured to tolerate yet.
+    """
+    end = prompt.tier_cumulative_tokens.get(tier)
+    if end is None:
+        # No breakpoint covers this content — naive mode, or tier 3.
+        return p.input_per_mtok, False
+    if prompt.tier_was_cached(tier, usage.cached_tokens):
         return p.cache_read_per_mtok, True
-    if end_token <= usage.cached_tokens + usage.cache_write_tokens:
+    if end <= usage.cached_tokens + usage.cache_write_tokens:
         return p.cache_write_per_mtok, False
     return p.input_per_mtok, False
+
+
+def _boundary_slack(prompt: AssembledPrompt, usage: Usage, call_id: str) -> dict[int, int]:
+    """Which tiers this call credited on slack rather than outright, and by
+    how much -- recorded on the CallRecord and logged, so "how often, and by
+    how many tokens" is a question the logs can answer rather than a silent
+    tolerance hiding a regression."""
+    slack = {
+        tier: prompt.boundary_shortfall(tier, usage.cached_tokens)
+        for tier in prompt.tier_cumulative_tokens
+        if prompt.tier_was_cached(tier, usage.cached_tokens)
+    }
+    slack = {tier: short for tier, short in slack.items() if short}
+    for tier, short in slack.items():
+        end = prompt.tier_cumulative_tokens[tier]
+        logger.info(
+            "tier %d credited on boundary slack: provider %d, boundary %d, "
+            "shortfall %d (%.2f%%)",
+            tier, usage.cached_tokens, end, short, 100.0 * short / end,
+            extra={"call_id": call_id, "mode": prompt.mode,
+                   "cached_tokens": usage.cached_tokens},
+        )
+    return slack
 
 
 def build_records(
@@ -109,16 +146,12 @@ def build_records(
         breakpoint_count=prompt.breakpoint_count,
         tier_tokens=dict(prompt.tier_tokens),
         baseline_cost_usd=baseline_cost(usage, p),
+        boundary_slack=_boundary_slack(prompt, usage, call_id),
     )
 
     injections = []
     for injected in prompt.injected:
-        end = prompt.tier_cumulative_tokens.get(injected.tier)
-        if end is None:
-            # No breakpoint covers this content — naive mode, or tier 3.
-            rate, was_cached = p.input_per_mtok, False
-        else:
-            rate, was_cached = _rate_for_region(end, usage, p)
+        rate, was_cached = _rate_for_region(prompt, injected.tier, usage, p)
         injections.append(
             InjectionRecord(
                 call_id=call_id,

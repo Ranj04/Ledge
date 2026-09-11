@@ -1694,3 +1694,74 @@ key. The growth test is written and xfailed so that landing it is one deletion, 
 **Why strict xfails in `tests/`, not `tests/review/`.** The gate must stay green and the defects
 must stay visible. `xfail(strict=True)` does both: the suite passes today, and the first change
 that fixes either defect turns an XPASS into a failure that forces the marker out.
+
+### D49 — 2026-09-10 — the tier boundary tolerates the provider's tokenizer, by a measured 2%, and says so when it does
+
+**The call, made by Ranjiv.** D48 escalated the attribution half of the tier-1 finding: the app
+counts a boundary in `cl100k_base`, the provider reports `cached_tokens` in its own tokenizer, and
+a strict `>=` marked tier 1 uncached on every live turn over a seven-token shortfall. The decision
+was *credit the tier when the provider's count reaches within tolerance of the boundary, and
+record the shortfall so it is visible rather than silent*. This entry records how the tolerance
+was derived and where the shortfall goes. Branch `stage4/boundary-slack`; `app/contracts.py` and
+`app/telemetry/cost.py` edited under explicit authorisation, nothing else outside tests and docs.
+
+**The tolerance is measured, not chosen.** A constant picked by feel is how this class of defect
+returns. So: every assembled prompt in the committed corpus — three seeded students x three seeded
+conversations x seven turns, both modes, 126 prompts — counted at the app's own boundary (the sum
+of per-block cl100k counts, which is what `tier_cumulative_tokens` holds) and again under
+`o200k_base` over the same concatenated prefix, the nearest encoding tiktoken carries to the live
+provider's:
+
+| region | cl100k size | provider-side shortfall | as a fraction |
+|---|---|---|---|
+| tier 0 boundary | 1,179–1,204 | 1–6 tokens (mean 2.7) | 0.08%–0.50% |
+| tier 1 boundary | 2,319–2,340 | 2–16 tokens (mean 7.7) | 0.09%–0.69% |
+| whole prompt | 3,174–4,345 | 8–32 tokens (mean 17.4) | 0.24%–0.84% |
+
+Never negative — o200k never counted *more* than cl100k anywhere in the corpus — and roughly
+proportional to length, which is why the tolerance is a fraction of the boundary and not a token
+count. One token of the tier-1 shortfall is the app's own doing: summing per-block counts
+over-counts the concatenation by exactly one at the tier-0/tier-1 join, on every prompt. The live
+provider sat about 0.1 points beyond o200k in the one recorded sample (2,268 against o200k's 2,270
+against the app's 2,275); the model's tokenizer is not in tiktoken and cannot be measured directly.
+
+**`BOUNDARY_SLACK = 0.02`.** Roughly 3x the worst boundary case (0.69%) and 6x the recorded live
+shortfall (0.31%): headroom for the real tokenizer drifting further from o200k than the one sample
+shows, without room for a genuine miss. At a 2,320-token boundary the slack is 46 tokens. A tier-1
+invalidation leaves the provider's count at the tier-0 boundary, 1,100+ tokens short, and reads as
+a miss; 100 tokens short (4.4%) reads as a miss. The only miss the rule can hide is a tier smaller
+than 2% of its own boundary, and the corpus's smallest cacheable tier is 48% of its boundary. The
+working is in the comment beside the constant so the next reader does not have to trust this entry.
+If the shortfall log starts reporting figures near 2%, the corpus has changed shape — the two
+encodings diverge far more on non-English text — and the fix is to count with the provider's
+tokenizer, not to widen the number.
+
+**The gap is flagged, not swallowed.** `AssembledPrompt.boundary_shortfall(tier, cached_tokens)`
+returns how many tokens short the provider's count was; `build_records` collects every tier it
+credited on slack into a new `CallRecord.boundary_slack: dict[tier, shortfall]` (empty when every
+credit was outright) and logs one JSON line per entry on the `memoryledger` logger — `tier 1
+credited on boundary slack: provider 2268, boundary 2275, shortfall 7 (0.31%)`, with `call_id`,
+`mode` and `cached_tokens` as fields. "How often, and by how much" is a grep. It is not a ledger
+column: that would touch `migrations/` and three stores, outside this change's authorisation; if
+the question needs SQL, that is the next step. The write boundary keeps its strict comparison — no
+cache write has been observed live (OpenAI reports none, Cortex never ran, D28), so there is nothing
+measured to tolerate.
+
+**Re-measured.** Nothing on the wire changes, and the four-way cost table is unmoved: a
+`--runs 4 --json` sweep before and after is byte-identical apart from `generated_at`. Under the
+simulator the ledger is also unmoved — tiered tier 0 and tier 1 both 85.71%, tier-1 memories a mean
+$0.175/month in a recorded sweep, zero calls credited on slack — because there both sides count in
+cl100k and every hit lands exactly on the boundary. The change shows on the live signature. Replaying
+the same 63 tiered calls with the provider's count as OpenAI reported it (the o200k count of the
+system message, frozen from turn 2, D48): tier 1 goes from **0.0% to 85.7%** cached, tier-1
+attribution from $0.1420 to $0.0325 (-77%), total attributed cost from $0.2786 to $0.1690, and the
+dashboard's top item — `mem_ef6be89e`, a profile — from $0.006048 to $0.001382 for the run. 54 of
+the 63 calls were credited on slack (the nine first turns cache nothing), shortfall 2–16 tokens,
+mean 7.7. That is what the live ledger was under-crediting by, every turn.
+
+**Tests.** The strict xfail pinning the defect is gone and the test passes as written. Added: the
+credit is recorded and logged with the numbers in it; an outright hit records nothing; a tier
+genuinely short (1,161 tokens, and 100 tokens) is still not credited and still billed at full price;
+the slack scales with the boundary. `test_the_cached_prefix_grows_across_turns_on_the_openai_implicit_path`
+is untouched and still `xfail(strict=True)` — the prefix-freeze half stays open until a live
+transcript clears fix (b) in D48.

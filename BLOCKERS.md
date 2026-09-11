@@ -268,9 +268,13 @@ compared against `CALL_LOG`. Not attempted — it is a credibility check, not a 
 
 ## 2026-08-07 — tier 1 is byte-stable but does not cache, and nobody knows why yet
 
-**Status:** open. Not a correctness problem — an unclaimed saving. As of 2026-09-10 nothing defers
-it any more; it needs an `OPENAI_API_KEY` to measure a fix against, and none is on the build
-machine.
+**Status:** half closed. Item 1 below (the ledger under-crediting tier 1 over a seven-token
+tokenizer shortfall) is **fixed** on branch `stage4/boundary-slack` — DECISIONS.md D49: the
+boundary tolerates a measured 2%, every credit that used the tolerance is recorded on
+`CallRecord.boundary_slack` and logged, and the strict xfail that pinned it is gone. Item 2 (the
+cached prefix freezing at the system message on OpenAI's implicit path) stays **open**: not a
+correctness problem — an unclaimed saving — and it needs an `OPENAI_API_KEY` to measure fix (b)
+against, and none is on the build machine.
 
 **Status, 2026-09-10 (branch `stage4/tier1-cache`): diagnosed, not fixed.** Two separate things
 were being read as one, and the original text below is kept because it records both correctly
@@ -291,6 +295,11 @@ observed and one of them wrongly explained.
    fix lives in `app/contracts.py` (protected) and `app/telemetry/cost.py`, and what the boundary
    should tolerate is a design call, not a builder's — escalated. Pinned, `xfail(strict=True)`:
    `tests/test_cost.py::test_a_provider_count_a_few_tokens_short_of_the_boundary_still_attributes_the_tier`.
+   *Resolved later the same day (D49):* Ranjiv chose "credit the tier, flag the gap". The
+   cl100k-vs-o200k shortfall was measured across every prompt in the corpus (2–16 tokens,
+   0.09%–0.69%, at the tier-1 boundary), `BOUNDARY_SLACK = 0.02` covers it with ~3x headroom, the
+   shortfall is recorded and logged per call, and the xfail is removed. Replaying the live
+   signature through the ledger: tier 1 reads 85.7% cached instead of 0%.
 
 2. **The freeze is real, and the hypothesis below is right about the cause and wrong about the
    consequence.** Wire versus history, measured: turn N sends `user: <tier 2/3 lines><question>`
@@ -348,8 +357,10 @@ observed and one of them wrongly explained.
 
 *To resolve, with a key:* run the five-turn conversation twice — as shipped (expect 2268, frozen)
 and with (b) (expect growth of roughly one exchange per turn) — and read both transcripts. If it
-holds, land (b), un-xfail the growth test, and settle the attribution boundary in item 1 at the
-same time; then re-run `scripts/experiment.py` and let the headline follow.
+holds, land (b) and un-xfail the growth test; then re-run `scripts/experiment.py` and let the
+headline follow. The attribution boundary in item 1 is already settled (D49), so the same run
+should also show the `credited on boundary slack` log line on every warm turn, with a shortfall in
+the single digits — that is the live confirmation of the measured tolerance.
 
 The ledger shows tier 0 at an **85%** cache hit rate and tier 1 at **0%**. That should not follow
 from the layout: both blocks are assembled from always-injected memories sorted by `memory_id`, and
