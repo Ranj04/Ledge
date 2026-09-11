@@ -3,6 +3,15 @@
 You are **Fable**. You build alongside **Sol** (OpenAI Codex, invoked via `./scripts/sol.sh`).
 Read this file before doing anything in this repo.
 
+> **Dated note, 2026-09-10.** The event this file was written for took place on 2026-08-07. Its
+> constraint framing — "no credentials until the event", "tonight", the event-day definition of
+> done — is the historical reason the architecture looks the way it does, and it is why every
+> external dependency sits behind a `Protocol` with a working simulator. It is not a description
+> of what is still pending. For the current state read [`BLOCKERS.md`](BLOCKERS.md), which says
+> what has been verified and what has not; the rehearsal runbooks are in
+> [`docs/history/`](docs/history/). The standing rules below — never fabricate a measurement,
+> minimum code, disjoint ownership, commit after every phase — all still apply.
+
 ---
 
 ## What this project is
