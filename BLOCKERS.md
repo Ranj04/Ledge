@@ -320,7 +320,10 @@ to show if anyone asks to see the tables.
 
 ## 2026-09-10 — No live `results/*.json` artifact exists
 
-**Status:** open. Needs an `OPENAI_API_KEY` and about ten minutes.
+**Status:** open. Needs an `OPENAI_API_KEY` and about ten minutes. Re-confirmed at T3.2: the
+key is still absent, so `results/` holds two simulator artifacts (Stage 1 bullets, Stage 2
+elements) and no live one; the Stage 2 delimiter's effect on the live 42.9% is unmeasured
+(DECISIONS.md D41, README.md beside the headline).
 
 The **42.9%** input-side reduction in `README.md` came from a live run on 2026-08-07 whose JSON
 output was not retained. Track C (C2) went to commit the artifact behind the headline and found
@@ -420,3 +423,32 @@ carries the integer (`tests/test_api.py::test_the_lifecycle_proposals_route_igno
 asserts 25). Rows recorded before the column stay `None`, by design
 (`tests/test_lifecycle.py::test_probes_tested_is_the_recorded_integer_or_none_when_unrecorded`).
 On Snowflake the column arrives through the untested `ALTER` path above.
+
+## 2026-09-10 — T3.2: what the integrated tree has still never done
+
+Stated once, plainly, at the end of the build. Each item points at the entry that carries it.
+
+1. **No live artifact.** No `OPENAI_API_KEY` on this machine. Both files in `results/` are the
+   simulator's, and say so in their `measurement` field. The Stage 2 re-measurement (D41) is
+   simulator-only; the live 42.9% remains 2026-08-07, bullet format. See "No live
+   `results/*.json` artifact exists" above.
+2. **The Snowflake embedding path has never been exercised.** `ablation/similarity.py ::
+   SnowflakeEmbedder` (Q3) calls `SNOWFLAKE.CORTEX.EMBED_TEXT_1024` through the connector, which is not
+   installed here — and the trial account carries no Cortex entitlement (D28), so it cannot run
+   there either. Its `# VERIFY-AT-EVENT:` lines (connector import, warehouse, role privileges,
+   result shape) are untouched. The ablation verdicts in this repo come from the lexical scorer.
+3. **`/ready` has never been verified against a real dependency failure.** It answers 503 when
+   `ledger.call_summary()` raises, the tokenizer fails to load, or the EverOS client is absent
+   (`app/api/main.py`), and `tests/test_logging.py` drives the 503 with a fake. Nobody has pulled a real Snowflake
+   connection or a real EverOS endpoint out from under a running service and watched the 503
+   arrive, nor measured how long the 30-second connector timeouts hold the check.
+4. **The Snowflake lifecycle path has never run for real.** `SnowflakeLedgerStore.execute`
+   (the MERGE rowcount and the timestamp bind) and `migrate._add_columns` (the ALTER that 0002
+   needs on Snowflake) are written, tested against fakes, and marked. See "The memory lifecycle
+   has never run against Snowflake" above.
+5. **The eviction dashboard still shows `$0.00/month` until the ledger has injection rows.**
+   Unchanged by 0002: the column that landed is `probes_tested`, not cost. The dollar figure
+   is `store.memory_costs`, which sums `memory_injections`; a ledger that has recorded no
+   conversation has none. Run `python scripts/experiment.py --runs 4 --record` before
+   `python -m ablation.run --sample 25`, or the demo shows `evict` next to `$0.00`. See "The
+   eviction dashboard reports `$0.00/month`" above.

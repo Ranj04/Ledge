@@ -1,0 +1,111 @@
+{
+  "generated_at": "2026-09-11T00:03:44.642128Z",
+  "providers": {
+    "cortex": "sim",
+    "everos": "sim",
+    "model": "claude-sonnet-4-5"
+  },
+  "measurement": "simulated",
+  "conversations": [
+    "conv_stoich_review",
+    "conv_exam_plan",
+    "conv_algebra_transfer"
+  ],
+  "turns": 21,
+  "runs_per_conversation": 4,
+  "total_runs": 12,
+  "per_conversation": {
+    "conv_stoich_review": {
+      "naive_mean": 0.081834,
+      "tiered_mean": 0.03862230000000001,
+      "reduction": 0.5280409120903291
+    },
+    "conv_exam_plan": {
+      "naive_mean": 0.083098,
+      "tiered_mean": 0.039103700000000005,
+      "reduction": 0.5294267010036342
+    },
+    "conv_algebra_transfer": {
+      "naive_mean": 0.08128,
+      "tiered_mean": 0.03845030000000001,
+      "reduction": 0.5269402066929133
+    }
+  },
+  "cost_basis": "input_side",
+  "cost_per_conversation_usd": {
+    "naive": {
+      "mean": 0.08207066666666667,
+      "median": 0.081834,
+      "stdev": 0.0007946591417174737,
+      "min": 0.08128,
+      "max": 0.083098
+    },
+    "tiered": {
+      "mean": 0.038725433333333344,
+      "median": 0.03862230000000001,
+      "stdev": 0.00028883496808364105,
+      "min": 0.03845030000000001,
+      "max": 0.039103700000000005
+    }
+  },
+  "reduction_fraction": {
+    "mean": 0.5281359399289589,
+    "median": 0.5280409120903291,
+    "stdev": 0.00106256506347024,
+    "min": 0.5269402066929133,
+    "max": 0.5294267010036342
+  },
+  "total_cost_per_conversation_usd": {
+    "naive": {
+      "mean": 0.09398666666666666,
+      "median": 0.093114,
+      "stdev": 0.001705043072414264,
+      "min": 0.092572,
+      "max": 0.096274
+    },
+    "tiered": {
+      "mean": 0.05064143333333334,
+      "median": 0.04990230000000001,
+      "stdev": 0.0012118620543559722,
+      "min": 0.0497423,
+      "max": 0.052279700000000005
+    }
+  },
+  "total_cost_reduction_fraction": 0.46118491984678667,
+  "output_token_divergence": {
+    "mean": 0.0,
+    "median": 0.0,
+    "stdev": 0.0,
+    "min": 0.0,
+    "max": 0.0
+  },
+  "cache_hit_rate": {
+    "naive": {
+      "mean": 0.0,
+      "median": 0.0,
+      "stdev": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "tiered": {
+      "mean": 0.6255767732370601,
+      "median": 0.6253080751945103,
+      "stdev": 0.0014319099576172642,
+      "min": 0.6240482619377752,
+      "max": 0.6273739825788948
+    }
+  },
+  "input_tokens_mean": {
+    "naive": 41035.333333333336,
+    "tiered": 41504.333333333336
+  },
+  "identical_answer_runs": 12,
+  "credits": {
+    "tokens_this_sweep": 1014308,
+    "credits_per_mtok": 2.55,
+    "estimated_credits_this_sweep": 2.5864854,
+    "trial_daily_cap": 10.0,
+    "percent_of_daily_cap": 25.864853999999998,
+    "billed": false
+  }
+}

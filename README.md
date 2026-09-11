@@ -92,6 +92,35 @@ CORTEX_PROVIDER=openai .venv/bin/python scripts/experiment.py --runs 4
 
 Machine-readable runs: [`results/`](results/).
 
+### What the provenance delimiter did to the numbers (simulator, 2026-09-10)
+
+Stage 2 changed the text sent to the model: every memory now renders as a
+`<memory id type origin>` element instead of a `- ` bullet (`DECISIONS.md` D41). The live
+**42.9%** above was measured on **2026-08-07** against the bullet format and has **not** been
+re-measured live — there is no `OPENAI_API_KEY` on the build machine. The simulator was run
+against both formats on the same corpus and the same scripted conversations, 3 × 4 runs each;
+the provenance delimiter is the only difference between the two columns.
+
+| input-side, per conversation | `- ` bullets, 2026-09-10 ([`results/2026-09-10-simulator.json`](results/2026-09-10-simulator.json)) | `<memory>` elements, 2026-09-10 ([`results/2026-09-10-simulator-stage2.json`](results/2026-09-10-simulator-stage2.json)) | change |
+|---|---|---|---|
+| **cost, naive** | **$0.05115** | **$0.08207** | **+60.5%** |
+| **cost, tiered** | **$0.02437** | **$0.03873** | **+58.9%** |
+| reduction, mean (naive → tiered) | 52.35% | 52.81% | +0.47 pt |
+| cache hit rate, tiered | 61.88% | 62.56% | +0.67 pt |
+| prompt tokens, naive | 25,574 | 41,035 | +60.5% |
+| prompt tokens, tiered | 25,686 | 41,504 | +61.6% |
+| total cost incl. output, naive / tiered | $0.06306 / $0.03629 | $0.09399 / $0.05064 | +49.0% / +39.6% |
+
+**Read the dollars, not the percentage.** The reduction went *up* by half a point and the
+bill went *up* by 59%. The element adds ~21 tokens to each of the ~104 memories a turn
+retrieves (~2,200 tokens per call). 78 of those memories are stable and sit in the cached
+prefix, so most of the new tokens are billed at the cache-read rate in `tiered` and at the
+full rate in `naive` — which raises the *fraction* saved while raising the *amount* paid in
+both modes. What the tokens bought is `tests/test_injection.py`: 29 hostile memories, 61
+tests, none of which can forge a header, close its own element, or pass as an instruction.
+That is the trade, stated here beside the old number rather than behind a percentage that
+moved in the opposite direction from the truth.
+
 **The hit rate is measured against the whole prompt.** `cache_hit_rate` is `cached_tokens / input_tokens`, and `input_tokens` is the *total* prompt — cached, written, and the current turn, which can never be cached. Dividing by the cacheable region instead would produce a larger number; this is the conservative framing and `/api/chat` and the session totals use it identically.
 
 **The baseline is not denied anything.** Caching on this provider is implicit and on by default, so
@@ -199,7 +228,8 @@ nothing caches unless a breakpoint says so, placement is load-bearing and the br
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q --ignore=tests/review   # 257 passed — the gate, measured 2026-09-10
+.venv/bin/python -m pytest -q tests/review            # 46 passed — the other model's adversarial tests
 ```
 
 ## Going live
